@@ -39,8 +39,8 @@ app = modal.App(
 )
 
 
-class ImageCaptionDataset():
-    """Dataset for image captioning with style tokens."""
+class ImageCaptionDataset(Dataset):
+    """Dataset for image captioning with style tokens. Written to be compatible with Modal and PyTorch DataSets."""
     
     def __init__(self, data_dir="/volume/data"):
         self.samples = []
@@ -159,7 +159,7 @@ def process_dataset():
 def main():
     results = process_dataset.remote()
     with open("main_caption_dataset.json", "w") as f:
-        json.dump(results, f)
+        json.dump(results, f, indent=4)
 
 if __name__ == "__main__":
     main()
