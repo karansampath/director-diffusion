@@ -6,7 +6,7 @@ from tqdm import tqdm
 import logging
 
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
 import modal
 
 from src.utils import STYLE_MAP
