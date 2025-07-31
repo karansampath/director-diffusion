@@ -19,15 +19,19 @@ image = (
         "accelerate",
         "numpy",
         "transformers",
-        "huggingface-hub[hf_transfer]"
+        "huggingface-hub[hf_transfer]",
     )
-    .env({
-        "HF_HUB_ENABLE_HF_TRANSFER": "1",
-        "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"
-    })
+    .env(
+        {
+            "HF_HUB_ENABLE_HF_TRANSFER": "1",
+            "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+        }
+    )
     .add_local_dir("src", "/src", copy=True)
 )
-volume = modal.Volume.from_name("director-diffusion-caption", create_if_missing=True) # upload data to this volume
+volume = modal.Volume.from_name(
+    "director-diffusion", create_if_missing=True
+)  # upload data to this volume
 huggingface_secret = modal.Secret.from_name(
     "huggingface-secret", required_keys=["HF_TOKEN"]
 )
@@ -41,27 +45,24 @@ app = modal.App(
 
 class ImageCaptionDataset(Dataset):
     """Dataset for image captioning with style tokens. Written to be compatible with Modal and PyTorch DataSets."""
-    
+
     def __init__(self, data_dir="/volume/data"):
         self.samples = []
-        
+
         # Collect all image paths with their style tokens
         for style_dir in os.listdir(data_dir):
             if style_dir not in STYLE_MAP:
                 continue
-                
+
             token = STYLE_MAP[style_dir]
             image_paths = glob(f"{data_dir}/{style_dir}/*.jpg")
-            
+
             for path in image_paths:
-                self.samples.append({
-                    "image_path": path,
-                    "style_token": token
-                })
-    
+                self.samples.append({"image_path": path, "style_token": token})
+
     def __len__(self):
         return len(self.samples)
-    
+
     def __getitem__(self, idx):
         return self.samples[idx]
 
@@ -78,13 +79,16 @@ class Model:
         from transformers import pipeline
         from huggingface_hub import snapshot_download
 
-        snapshot_download("Qwen/Qwen2.5-VL-3B-Instruct", local_dir="/volume/models/Qwen/Qwen2.5-VL-3B-Instruct")
+        snapshot_download(
+            "Qwen/Qwen2.5-VL-3B-Instruct",
+            local_dir="/volume/models/Qwen/Qwen2.5-VL-3B-Instruct",
+        )
         self.pipe = pipeline(
-            "image-text-to-text", 
-            model="/volume/models/Qwen/Qwen2.5-VL-3B-Instruct", 
+            "image-text-to-text",
+            model="/volume/models/Qwen/Qwen2.5-VL-3B-Instruct",
             device_map="auto",
             torch_dtype=torch.bfloat16,
-            max_new_tokens=128
+            max_new_tokens=128,
         )
         self.pipe.model = torch.compile(self.pipe.model, mode="reduce-overhead")
 
@@ -118,10 +122,10 @@ class Model:
             with torch.no_grad():
                 raw_captions = self.pipe(messages, batch_size=1)
             results = []
-            final_caption = f"{data['style_token']} {extract_assistant_content(raw_captions)}"
-            results.append(
-                {"file_name": data["image_path"], "text": final_caption}
+            final_caption = (
+                f"{data['style_token']} {extract_assistant_content(raw_captions)}"
             )
+            results.append({"file_name": data["image_path"], "text": final_caption})
             return results
 
         except Exception as e:
@@ -134,20 +138,25 @@ def extract_assistant_content(raw_caption):
     Extracts the assistant's content from a conversation list.
     """
     try:
-        return raw_caption[0]['generated_text'][1]['content']
+        return raw_caption[0]["generated_text"][1]["content"]
     except Exception:
         return ""
+
 
 @app.function()
 def process_dataset():
     # Create dataset and dataloader
     dataset = ImageCaptionDataset()
-    
+
     model = Model()
     all_results = []
-    
+
     # Process dataset by mapping over it
-    for result in tqdm(model.caption_image.map(dataset.get_samples()), total=len(dataset), desc="Processing images"):
+    for result in tqdm(
+        model.caption_image.map(dataset.get_samples()),
+        total=len(dataset),
+        desc="Processing images",
+    ):
         if result:
             all_results.extend(result)
     logging.info(f"Captioning complete! Processed {len(all_results)} images.")
@@ -155,11 +164,13 @@ def process_dataset():
     # Save results
     return all_results
 
+
 @app.local_entrypoint()
 def main():
     results = process_dataset.remote()
     with open("main_caption_dataset.json", "w") as f:
         json.dump(results, f, indent=4)
+
 
 if __name__ == "__main__":
     main()
