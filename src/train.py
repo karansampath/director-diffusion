@@ -357,22 +357,7 @@ class FluxTrainer:
     def create_director_lora(self, director_config: DirectorConfig) -> str:
         """Create and configure LoRA adapter for a director."""
 
-        # FIXED: Updated target modules for FLUX transformer architecture
-        # These are the correct module names for FluxTransformer2DModel
         target_modules = [
-            # Single transformer blocks
-            "transformer_blocks.0.attn.to_q",
-            "transformer_blocks.0.attn.to_k",
-            "transformer_blocks.0.attn.to_v",
-            "transformer_blocks.0.attn.to_out.0",
-            "transformer_blocks.0.ff.net.0.proj",
-            "transformer_blocks.0.ff.net.2",
-            # You can add more blocks as needed
-        ]
-
-        # Alternative: Target all linear layers in the transformer
-        # This is a more comprehensive approach
-        target_modules_comprehensive = [
             "single_transformer_blocks.0.attn.to_q",
             "single_transformer_blocks.0.attn.to_k",
             "single_transformer_blocks.0.attn.to_v",
@@ -387,7 +372,7 @@ class FluxTrainer:
             lora_alpha=director_config.lora_alpha,
             lora_dropout=0.1,
             init_lora_weights="gaussian",
-            target_modules=target_modules_comprehensive,  # Using comprehensive targets
+            target_modules=target_modules,
             modules_to_save=None,
         )
 
@@ -505,7 +490,7 @@ class FluxTrainer:
 
                     optimizer.step()
                     optimizer.zero_grad(set_to_none=True)  # More memory efficient
-                    
+
                 if self.accelerator.sync_gradients:
                     global_step += 1
 
@@ -529,7 +514,6 @@ class FluxTrainer:
                     if global_step >= director_config.max_train_steps:
                         return
             print(f"Global step: {global_step}")
-
 
     async def compute_loss(self, batch):
         """Compute flow matching loss with optimizations."""
@@ -605,7 +589,6 @@ class FluxTrainer:
         )
         noisy_model_input = (1.0 - sigmas) * model_input + sigmas * noise
 
-
         # Pack latents for FLUX transformer
         # Get actual dimensions from the tensor
         batch_size, num_channels, height, width = noisy_model_input.shape
@@ -638,9 +621,7 @@ class FluxTrainer:
         )[0]
 
         # Unpack the model prediction
-        model_pred = self._unpack_latents(
-            model_pred, height=height, width=width
-        )
+        model_pred = self._unpack_latents(model_pred, height=height, width=width)
 
         # Compute loss using flow matching target
         target = noise - model_input
@@ -725,8 +706,44 @@ class FluxTrainer:
         prompt = f"a cinematic scene {director_config.trigger_phrase}"
 
         with torch.no_grad():
-            # Implementation would generate images and log to wandb
-            pass
+            # Generate validation images using the pipeline
+            pipeline = FluxPipeline.from_pretrained(
+                MODEL_DIR,
+                transformer=self.transformer,
+                torch_dtype=torch.bfloat16,
+            )
+            pipeline.to(self.accelerator.device)
+
+            # Generate multiple validation images
+            validation_images = []
+            for _ in range(self.config.num_validation_images):
+                image = pipeline(
+                    prompt=prompt,
+                    height=self.config.resolution,
+                    width=self.config.resolution,
+                    num_inference_steps=20,
+                    guidance_scale=3.5,
+                ).images[0]
+                validation_images.append(image)
+
+            # Log to wandb if available
+            try:
+                import wandb
+
+                wandb.log(
+                    {
+                        f"validation/{adapter_name}": [
+                            wandb.Image(img, caption=f"{prompt} - {i}")
+                            for i, img in enumerate(validation_images)
+                        ]
+                    }
+                )
+            except ImportError:
+                logging.warning("wandb not available for validation logging")
+
+            # Clean up pipeline to free memory
+            del pipeline
+            torch.cuda.empty_cache()
 
         # Switch back to training mode
         self.transformer.train()
@@ -954,7 +971,6 @@ class FluxTrainer:
         while len(sigma.shape) < n_dim:
             sigma = sigma.unsqueeze(-1)
         return sigma
-
 
 
 @app.function(
