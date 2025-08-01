@@ -6,6 +6,7 @@ from typing import List
 import json
 import asyncio
 from contextlib import nullcontext
+from tqdm import tqdm
 
 import modal
 import torch
@@ -25,7 +26,11 @@ import copy
 
 # Enhanced image with performance optimizations
 image = (
-    modal.Image.debian_slim(python_version="3.12")
+    modal.Image.from_registry(
+        "nvidia/cuda:12.8.1-devel-ubuntu22.04",
+        add_python="3.12",
+    )
+    .entrypoint([])
     .uv_pip_install(
         "accelerate",
         "datasets",
@@ -81,9 +86,9 @@ class DirectorConfig:
 
     # Training hyperparameters per director
     learning_rate: float = 4e-4
-    max_train_steps: int = 800
-    rank: int = 32
-    lora_alpha: int = 32
+    max_train_steps: int = 500
+    rank: int = 16
+    lora_alpha: int = 16
 
 
 @dataclass
@@ -94,7 +99,7 @@ class MultiDirectorConfig:
         default_factory=lambda: [
             DirectorConfig(
                 name="anderson",
-                style_description="Wes Anderson symmetrical cinematic style",
+                style_description="Wes Anderson cinematic style",
                 data_path="/volume/data/anderson",
                 trigger_phrase="<anderson-style>",
             )
@@ -108,7 +113,7 @@ class MultiDirectorConfig:
     train_batch_size: int = 2
     gradient_accumulation_steps: int = 4
 
-    enable_torch_compile: bool = True
+    enable_torch_compile: bool = False
     enable_xformers: bool = True
     enable_gradient_checkpointing: bool = True
     mixed_precision: str = "bf16"
@@ -120,6 +125,139 @@ class MultiDirectorConfig:
 
     num_validation_images: int = 4
     validation_epochs: int = 50
+
+
+class DirectorDataset(Dataset):
+    """Dataset that loads from caption dataset and filters by director."""
+
+    def __init__(
+        self,
+        caption_path,
+        director_name,
+        trigger_phrase,
+        resolution=1024,
+        cache_latents=True,
+        vae=None,
+    ):
+        self.caption_path = Path(caption_path)
+        self.director_name = director_name
+        self.trigger_phrase = trigger_phrase
+        self.resolution = resolution
+        self.cache_latents = cache_latents
+        self.vae = vae
+
+        # Load and filter data for this director
+        self.load_director_data()
+
+        # Setup transforms
+        self.setup_transforms()
+
+        # Pre-cache latents if enabled
+        if cache_latents and vae is not None:
+            self.cache_image_latents()
+
+    def load_director_data(self):
+        """Load and filter data for specific director from main caption dataset."""
+
+        logging.info(f"Loading data for director: {self.director_name}")
+
+        # Load main caption dataset
+        with open(self.caption_path, "r") as f:
+            all_captions = json.load(f)
+
+        # Filter for this director's images
+        self.items = []
+        director_path_pattern = f"/volume/data/{self.director_name}/"
+
+        for item in all_captions:
+            if director_path_pattern in item["file_name"]:
+                # Convert absolute path to be accessible in container
+                image_path = Path(item["file_name"])
+
+                # Verify image exists
+                if image_path.exists():
+                    self.items.append(
+                        {
+                            "image_path": image_path,
+                            "caption": item[
+                                "text"
+                            ],  # Caption already has trigger phrase
+                        }
+                    )
+                else:
+                    logging.warning(f"Image not found: {image_path}")
+
+        logging.info(
+            f"Loaded {len(self.items)} images for director {self.director_name}"
+        )
+
+        if len(self.items) == 0:
+            raise ValueError(
+                f"No images found for director {self.director_name} in {self.caption_path}"
+            )
+
+    def setup_transforms(self):
+        """Setup optimized image transforms."""
+
+        self.transforms = transforms.Compose(
+            [
+                transforms.Resize(
+                    self.resolution, interpolation=transforms.InterpolationMode.LANCZOS
+                ),
+                transforms.CenterCrop(self.resolution),
+                transforms.ToTensor(),
+                transforms.Normalize([0.5], [0.5]),
+            ]
+        )
+
+    def cache_image_latents(self):
+        """Pre-cache VAE latents for faster training."""
+
+        logging.info(f"Caching latents for {len(self.items)} images...")
+        self.cached_latents = []
+
+        with torch.no_grad():
+            for item in self.items:
+                image = Image.open(item["image_path"]).convert("RGB")
+                image_tensor = self.transforms(image).unsqueeze(0)
+
+                # Encode with VAE
+                latent = self.vae.encode(
+                    image_tensor.to(self.vae.device, dtype=self.vae.dtype)
+                ).latent_dist.sample()
+
+                # Handle potential extra dimensions
+                if len(latent.shape) == 5 and latent.shape[1] == 1:
+                    # If shape is [1, 1, channels, height, width], squeeze the extra dimension
+                    latent = latent.squeeze(1)
+                    print(f"Squeezed latent shape: {latent.shape}")
+
+                self.cached_latents.append(latent.cpu())
+
+        logging.info("Latent caching completed!")
+
+    def __len__(self):
+        return len(self.items)
+
+    def __getitem__(self, idx):
+        item = self.items[idx]
+
+        if self.cache_latents and hasattr(self, "cached_latents"):
+            # Use pre-cached latents
+            latent = self.cached_latents[idx]
+            return {
+                "latents": latent,
+                "caption": item["caption"],
+            }
+        else:
+            # Load and transform image on-the-fly
+            image = Image.open(item["image_path"]).convert("RGB")
+            image_tensor = self.transforms(image)
+
+            return {
+                "pixel_values": image_tensor,
+                "caption": item["caption"],
+            }
 
 
 class FluxTrainer:
@@ -335,7 +473,6 @@ class FluxTrainer:
     ):
         """Optimized training loop for a director."""
 
-        progress_bar = range(director_config.max_train_steps)
         global_step = 0
 
         # Enable autocast for mixed precision
@@ -350,8 +487,8 @@ class FluxTrainer:
             else nullcontext()
         )
 
-        for epoch in range(1000):  # Large number, will break on max_steps
-            for batch in dataloader:
+        for _ in tqdm(range(1000)):
+            for batch in tqdm(dataloader):
                 with self.accelerator.accumulate(self.transformer):
                     with autocast_ctx:
                         # Forward pass with optimizations
@@ -368,7 +505,7 @@ class FluxTrainer:
 
                     optimizer.step()
                     optimizer.zero_grad(set_to_none=True)  # More memory efficient
-
+                    
                 if self.accelerator.sync_gradients:
                     global_step += 1
 
@@ -391,6 +528,8 @@ class FluxTrainer:
 
                     if global_step >= director_config.max_train_steps:
                         return
+            print(f"Global step: {global_step}")
+
 
     async def compute_loss(self, batch):
         """Compute flow matching loss with optimizations."""
@@ -434,14 +573,10 @@ class FluxTrainer:
             ) * vae_config_scaling_factor
             model_input = model_input.to(dtype=weight_dtype)
 
-        # Debug: Print actual dimensions
-        print(f"Model input shape: {model_input.shape}")
-
         # Handle unexpected tensor dimensions - squeeze if needed
         if len(model_input.shape) == 5:
             # If shape is [batch, 1, channels, height, width], squeeze the extra dimension
             model_input = model_input.squeeze(1)
-            print(f"Squeezed model input shape: {model_input.shape}")
         elif len(model_input.shape) != 4:
             raise ValueError(
                 f"Unexpected model input shape: {model_input.shape}. Expected 4D tensor [batch, channels, height, width]"
@@ -470,20 +605,10 @@ class FluxTrainer:
         )
         noisy_model_input = (1.0 - sigmas) * model_input + sigmas * noise
 
-        print(f"Noisy model input shape: {noisy_model_input.shape}")
 
         # Pack latents for FLUX transformer
         # Get actual dimensions from the tensor
         batch_size, num_channels, height, width = noisy_model_input.shape
-        print(
-            f"Before packing - Batch: {batch_size}, Channels: {num_channels}, H: {height}, W: {width}"
-        )
-
-        # FLUX expects 16 channels, but we have different number - let's handle this
-        if num_channels != 16:
-            print(f"Warning: Expected 16 channels for FLUX, got {num_channels}")
-            # If we have fewer channels, we might need to pad or handle differently
-            # For now, let's continue with the actual channels we have
 
         packed_noisy_model_input = self._pack_latents(
             noisy_model_input,
@@ -492,16 +617,13 @@ class FluxTrainer:
             height=height,
             width=width,
         )
-        print(f"After packing shape: {packed_noisy_model_input.shape}")
 
         # Prepare image IDs using latent dimensions (not original image dimensions)
         img_ids = self._prepare_latent_image_ids(
-            batch_size=batch_size,
             height=height * 8,  # Convert back to original image size for ID calculation
             width=width * 8,  # Convert back to original image size for ID calculation
-            device=device,
-            dtype=weight_dtype,
         )
+        guidance = torch.full((batch_size,), 3.5, device=device, dtype=weight_dtype)
 
         # Predict the noise residual
         model_pred = self.transformer(
@@ -509,14 +631,15 @@ class FluxTrainer:
             timestep=timesteps,
             encoder_hidden_states=prompt_embeds,
             pooled_projections=pooled_prompt_embeds,
+            guidance=guidance,
             txt_ids=text_ids,
-            img_ids=img_ids,
+            img_ids=img_ids.to(device=device, dtype=weight_dtype),
             return_dict=False,
         )[0]
 
         # Unpack the model prediction
         model_pred = self._unpack_latents(
-            model_pred, height=height, width=width, vae_scale_factor=8
+            model_pred, height=height, width=width
         )
 
         # Compute loss using flow matching target
@@ -540,13 +663,13 @@ class FluxTrainer:
         )
         return latents
 
-    def _unpack_latents(self, latents, height, width, vae_scale_factor):
+    def _unpack_latents(self, latents, height, width):
         """Unpack latents from FLUX transformer output."""
         batch_size, num_patches, channels = latents.shape
         # Calculate the correct unpacked dimensions
         patch_size = 2
-        latent_height = height // vae_scale_factor
-        latent_width = width // vae_scale_factor
+        latent_height = height
+        latent_width = width
 
         # FLUX unpacking: convert from (B, H*W/4, 64) back to (B, 16, H, W)
         channels_per_patch = channels // 4  # 64 // 4 = 16
@@ -567,8 +690,8 @@ class FluxTrainer:
         )
         return latents
 
-    def _prepare_latent_image_ids(self, batch_size, height, width, device, dtype):
-        """Prepare image IDs for FLUX transformer."""
+    def _prepare_latent_image_ids(self, height, width):
+        """Prepare image IDs for FLUX transformer as a 2D tensor."""
         # Calculate latent dimensions (VAE downscales by 8x)
         latent_height = height // 8
         latent_width = width // 8
@@ -588,10 +711,7 @@ class FluxTrainer:
         # Flatten to sequence
         latent_image_ids = latent_image_ids.reshape(patch_height * patch_width, 3)
 
-        # Expand for batch size
-        latent_image_ids = latent_image_ids.unsqueeze(0).repeat(batch_size, 1, 1)
-
-        return latent_image_ids.to(device=device, dtype=dtype)
+        return latent_image_ids
 
     async def validate_director(
         self, director_config: DirectorConfig, adapter_name: str
@@ -836,138 +956,6 @@ class FluxTrainer:
         return sigma
 
 
-class DirectorDataset(Dataset):
-    """Dataset that loads from caption dataset and filters by director."""
-
-    def __init__(
-        self,
-        caption_path,
-        director_name,
-        trigger_phrase,
-        resolution=1024,
-        cache_latents=True,
-        vae=None,
-    ):
-        self.caption_path = Path(caption_path)
-        self.director_name = director_name
-        self.trigger_phrase = trigger_phrase
-        self.resolution = resolution
-        self.cache_latents = cache_latents
-        self.vae = vae
-
-        # Load and filter data for this director
-        self.load_director_data()
-
-        # Setup transforms
-        self.setup_transforms()
-
-        # Pre-cache latents if enabled
-        if cache_latents and vae is not None:
-            self.cache_image_latents()
-
-    def load_director_data(self):
-        """Load and filter data for specific director from main caption dataset."""
-
-        logging.info(f"Loading data for director: {self.director_name}")
-
-        # Load main caption dataset
-        with open(self.caption_path, "r") as f:
-            all_captions = json.load(f)
-
-        # Filter for this director's images
-        self.items = []
-        director_path_pattern = f"/volume/data/{self.director_name}/"
-
-        for item in all_captions:
-            if director_path_pattern in item["file_name"]:
-                # Convert absolute path to be accessible in container
-                image_path = Path(item["file_name"])
-
-                # Verify image exists
-                if image_path.exists():
-                    self.items.append(
-                        {
-                            "image_path": image_path,
-                            "caption": item[
-                                "text"
-                            ],  # Caption already has trigger phrase
-                        }
-                    )
-                else:
-                    logging.warning(f"Image not found: {image_path}")
-
-        logging.info(
-            f"Loaded {len(self.items)} images for director {self.director_name}"
-        )
-
-        if len(self.items) == 0:
-            raise ValueError(
-                f"No images found for director {self.director_name} in {self.caption_path}"
-            )
-
-    def setup_transforms(self):
-        """Setup optimized image transforms."""
-
-        self.transforms = transforms.Compose(
-            [
-                transforms.Resize(
-                    self.resolution, interpolation=transforms.InterpolationMode.LANCZOS
-                ),
-                transforms.CenterCrop(self.resolution),
-                transforms.ToTensor(),
-                transforms.Normalize([0.5], [0.5]),
-            ]
-        )
-
-    def cache_image_latents(self):
-        """Pre-cache VAE latents for faster training."""
-
-        logging.info(f"Caching latents for {len(self.items)} images...")
-        self.cached_latents = []
-
-        with torch.no_grad():
-            for item in self.items:
-                image = Image.open(item["image_path"]).convert("RGB")
-                image_tensor = self.transforms(image).unsqueeze(0)
-
-                # Encode with VAE
-                latent = self.vae.encode(
-                    image_tensor.to(self.vae.device, dtype=self.vae.dtype)
-                ).latent_dist.sample()
-
-                # Handle potential extra dimensions
-                if len(latent.shape) == 5 and latent.shape[1] == 1:
-                    # If shape is [1, 1, channels, height, width], squeeze the extra dimension
-                    latent = latent.squeeze(1)
-                    print(f"Squeezed latent shape: {latent.shape}")
-
-                self.cached_latents.append(latent.cpu())
-
-        logging.info("Latent caching completed!")
-
-    def __len__(self):
-        return len(self.items)
-
-    def __getitem__(self, idx):
-        item = self.items[idx]
-
-        if self.cache_latents and hasattr(self, "cached_latents"):
-            # Use pre-cached latents
-            latent = self.cached_latents[idx]
-            return {
-                "latents": latent,
-                "caption": item["caption"],
-            }
-        else:
-            # Load and transform image on-the-fly
-            image = Image.open(item["image_path"]).convert("RGB")
-            image_tensor = self.transforms(image)
-
-            return {
-                "pixel_values": image_tensor,
-                "caption": item["caption"],
-            }
-
 
 @app.function(
     gpu="H200",
@@ -979,7 +967,7 @@ async def train_multi_director(config_dict: dict):
     """Main training function for multiple directors."""
 
     config = MultiDirectorConfig(**config_dict)
-    trainer = OptimizedFluxTrainer(config)
+    trainer = FluxTrainer(config)
 
     # Setup
     trainer.setup_accelerator()
@@ -1029,7 +1017,7 @@ def download_flux_model():
 
     # Verify the model loads correctly
     print("🔍 Verifying model installation...")
-    pipeline = FluxPipeline.from_pretrained(MODEL_DIR, torch_dtype=torch.bfloat16)
+    FluxPipeline.from_pretrained(MODEL_DIR, torch_dtype=torch.bfloat16)
     print("✅ FLUX model successfully downloaded and verified!")
 
     # Commit the volume to persist the model
@@ -1041,11 +1029,9 @@ def download_flux_model():
 def main():
     """Main entry point for multi-director training."""
 
-    # Step 1: Download FLUX model if not already present
     print("🔄 Step 1: Installing FLUX model...")
-    # download_flux_model.remote()
+    download_flux_model.remote()
     with modal.enable_output(show_progress=True):
-        # Step 3: Setup configuration and start training
-        print("🔄 Step 3: Starting multi-director training...")
+        print("🔄 Step 2: Starting multi-director training...")
         config = MultiDirectorConfig()
         train_multi_director.remote(config.__dict__)
