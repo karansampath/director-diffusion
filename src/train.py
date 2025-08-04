@@ -24,7 +24,6 @@ from diffusers import FlowMatchEulerDiscreteScheduler
 from transformers import CLIPTokenizer, T5TokenizerFast
 import copy
 
-# Enhanced image with performance optimizations
 image = (
     modal.Image.from_registry(
         "nvidia/cuda:12.8.1-devel-ubuntu22.04",
@@ -86,9 +85,9 @@ class DirectorConfig:
 
     # Training hyperparameters per director
     learning_rate: float = 4e-4
-    max_train_steps: int = 500
-    rank: int = 16
-    lora_alpha: int = 16
+    max_train_steps: int = 300
+    rank: int = 32
+    lora_alpha: int = 64
 
 
 @dataclass
@@ -102,7 +101,19 @@ class MultiDirectorConfig:
                 style_description="Wes Anderson cinematic style",
                 data_path="/volume/data/anderson",
                 trigger_phrase="<anderson-style>",
-            )
+            ),
+            DirectorConfig(
+                name="nolan",
+                style_description="Christopher Nolan cinematic style",
+                data_path="/volume/data/nolan",
+                trigger_phrase="<nolan-style>",
+            ),
+            DirectorConfig(
+                name="villeneuve",
+                style_description="Denis Villeneuve cinematic style",
+                data_path="/volume/data/villeneuve",
+                trigger_phrase="<villeneuve-style>",
+            ),
         ]
     )
 
@@ -110,12 +121,12 @@ class MultiDirectorConfig:
 
     base_model: str = "black-forest-labs/FLUX.1-dev"
     resolution: int = 1024
-    train_batch_size: int = 2
+    train_batch_size: int = 4
     gradient_accumulation_steps: int = 4
 
     enable_torch_compile: bool = False
     enable_xformers: bool = True
-    enable_gradient_checkpointing: bool = True
+    enable_gradient_checkpointing: bool = False
     mixed_precision: str = "bf16"
     use_tf32: bool = True
     cache_latents: bool = True
@@ -318,10 +329,8 @@ class FluxTrainer:
             self.base_pipeline.text_encoder_2,
         ]
 
-        # Setup text encoders and tokenizers
         self.setup_text_encoders_and_tokenizers()
 
-        # Move to device
         device = self.accelerator.device
         weight_dtype = (
             torch.bfloat16 if self.config.mixed_precision == "bf16" else torch.float16
@@ -338,11 +347,9 @@ class FluxTrainer:
         for encoder in self.text_encoders:
             encoder.requires_grad_(False)
 
-        # Enable gradient checkpointing for memory efficiency
         if self.config.enable_gradient_checkpointing:
             self.transformer.enable_gradient_checkpointing()
 
-        # Compile models for performance
         if self.config.enable_torch_compile:
             try:
                 self.transformer = torch.compile(
@@ -401,7 +408,7 @@ class FluxTrainer:
             dataset,
             batch_size=self.config.train_batch_size,
             shuffle=True,
-            num_workers=2,
+            num_workers=8,
             pin_memory=True,
             persistent_workers=True,
         )
@@ -442,7 +449,6 @@ class FluxTrainer:
         # Get trainable parameters for current adapter
         trainable_params = [p for p in self.transformer.parameters() if p.requires_grad]
 
-        # Use AdamW with optimized settings
         optimizer = torch.optim.AdamW(
             trainable_params,
             lr=director_config.learning_rate,
@@ -456,7 +462,6 @@ class FluxTrainer:
     async def training_loop(
         self, director_config: DirectorConfig, dataloader, optimizer, adapter_name: str
     ):
-        """Optimized training loop for a director."""
 
         global_step = 0
 
@@ -472,51 +477,50 @@ class FluxTrainer:
             else nullcontext()
         )
 
-        for _ in tqdm(range(1000)):
-            for batch in tqdm(dataloader):
-                with self.accelerator.accumulate(self.transformer):
-                    with autocast_ctx:
-                        # Forward pass with optimizations
-                        loss = await self.compute_loss(batch)
+        with tqdm(total=director_config.max_train_steps, desc=f"Training {director_config.name}"):
+            while global_step < director_config.max_train_steps:
+                for batch in tqdm(dataloader):
+                    with self.accelerator.accumulate(self.transformer):
+                        with autocast_ctx:
+                            # Forward pass with optimizations
+                            loss = await self.compute_loss(batch)
 
-                    # Backward pass
-                    self.accelerator.backward(loss)
+                        # Backward pass
+                        self.accelerator.backward(loss)
 
-                    # Gradient clipping
+                        # Gradient clipping
+                        if self.accelerator.sync_gradients:
+                            self.accelerator.clip_grad_norm_(
+                                self.transformer.parameters(), max_norm=1.0
+                            )
+
+                        optimizer.step()
+                        optimizer.zero_grad(set_to_none=True)  # More memory efficient
+
                     if self.accelerator.sync_gradients:
-                        self.accelerator.clip_grad_norm_(
-                            self.transformer.parameters(), max_norm=1.0
+                        global_step += 1
+
+                        # Send metrics to wandb
+                        self.accelerator.log(
+                            {"train/loss": loss.item()},
+                            step=global_step,
                         )
 
-                    optimizer.step()
-                    optimizer.zero_grad(set_to_none=True)  # More memory efficient
+                        # Console print
+                        if global_step % 10 == 0:
+                            print(
+                                f"Director {director_config.name} "
+                                f"- Step {global_step}, Loss: {loss.item():.4f}"
+                            )
 
-                if self.accelerator.sync_gradients:
-                    global_step += 1
+                        # Validation
+                        if global_step % self.config.validation_epochs == 0:
+                            await self.validate_director(director_config, adapter_name)
 
-                    # Send metrics to wandb
-                    self.accelerator.log(
-                        {"train/loss": loss.item()},
-                        step=global_step,
-                    )
-
-                    # Console print
-                    if global_step % 10 == 0:
-                        logging.info(
-                            f"Director {director_config.name} "
-                            f"- Step {global_step}, Loss: {loss.item():.4f}"
-                        )
-
-                    # Validation
-                    if global_step % self.config.validation_epochs == 0:
-                        await self.validate_director(director_config, adapter_name)
-
-                    if global_step >= director_config.max_train_steps:
-                        return
-            print(f"Global step: {global_step}")
+                        if global_step >= director_config.max_train_steps:
+                            return
 
     async def compute_loss(self, batch):
-        """Compute flow matching loss with optimizations."""
 
         device = self.accelerator.device
         weight_dtype = (

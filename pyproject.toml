@@ -21,4 +21,5 @@ dependencies = [
     "transformers>=4.53.3",
     "accelerate",
     "peft>=0.16.0",
+    "gradio>=5.39.0",
 ]

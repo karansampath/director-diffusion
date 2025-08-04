@@ -113,7 +113,7 @@ class Model:
                         {"type": "image", "image": img},
                         {
                             "type": "text",
-                            "text": "Describe exactly what you see in less than 15 words, don't hallucinate.",
+                            "text": "Describe this image in detail, focusing on the cinematic style, composition, lighting, and color palette. Then, describe the content of the image. Be as descriptive as possible and do not hallucinate. Use less than 50 words.",
                         },
                     ],
                 },
