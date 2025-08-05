@@ -10,8 +10,7 @@ Uses:
 - modal for infrastructure
 - shotdeck (https://shotdeck.com/welcome/home) and ffmpeg for training stills
 - BLIP-2 and Qwen 2.5VL - 3B for image captioning
-- 
-
+- Choice of Flux 1 - Krea dev (black-forest-labs/FLUX.1-Krea-dev) over black-forest-labs/FLUX.1-dev due to photorealism
 
 🎬 Director Counts in Dataset:
 ========================================

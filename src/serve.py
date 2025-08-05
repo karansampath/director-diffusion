@@ -146,7 +146,8 @@ class FluxServeModel:
             torch.manual_seed(seed)
             
         pipeline = self.base_pipeline
-        
+        lora_loaded = False # Track if a LoRA was loaded
+
         # Load LoRA if specified
         if lora_name and lora_name in self.available_loras:
             lora_info = self.available_loras[lora_name]
@@ -154,6 +155,7 @@ class FluxServeModel:
             
             # Load LoRA weights
             pipeline.load_lora_weights(lora_info.path)
+            lora_loaded = True
             
             # Add trigger phrase if not already in prompt
             if lora_info.trigger_phrase not in prompt:
@@ -173,6 +175,11 @@ class FluxServeModel:
                 max_sequence_length=config.max_sequence_length,
             )
         
+         # UNLOAD THE LORA WEIGHTS
+        if lora_loaded:
+            pipeline.unload_lora_weights()
+            logger.info(f"Unloaded LoRA: {lora_name}")
+            
         # Convert to bytes
         buffer = io.BytesIO()
         result.images[0].save(buffer, format="PNG")
@@ -264,7 +271,8 @@ def gradio_app():
         description = gradio_config.description
         example_prompts = gradio_config.example_prompts
         theme = gradio_config.theme
-    except:
+    except Exception as e:
+        logger.error(f"Failed to load GradioConfig: {e}")
         # Fallback config if GradioConfig fails
         title = "FLUX LoRA Playground"
         description = "Compare base FLUX model with LoRA fine-tuned versions"

@@ -4,7 +4,6 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List
 import json
-import asyncio
 from contextlib import nullcontext
 from tqdm import tqdm
 
@@ -14,14 +13,14 @@ from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 from PIL import Image
 from accelerate import Accelerator
-from diffusers import FluxPipeline
+from diffusers import FluxPipeline, AutoencoderKL, FluxTransformer2DModel
 from peft import LoraConfig, get_peft_model_state_dict
 import logging
 from diffusers.training_utils import (
     compute_density_for_timestep_sampling,
 )
 from diffusers import FlowMatchEulerDiscreteScheduler
-from transformers import CLIPTokenizer, T5TokenizerFast
+from transformers import CLIPTokenizer, T5TokenizerFast, CLIPTextModel  
 import copy
 
 image = (
@@ -70,8 +69,13 @@ app = modal.App(
     secrets=[huggingface_secret, wandb_secret],
 )
 
-MODEL_DIR = "/volume/models"
-DIRECTORS_DIR = "/volume/trained_loras"
+MODEL_DIR = "/volume/flux-krea"
+DIRECTORS_DIR = "/volume/director_loras"
+TIMEOUT = 40000
+
+# Configure logger
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -83,12 +87,16 @@ class DirectorConfig:
     data_path: str
     trigger_phrase: str
 
-    # Training hyperparameters per director
-    learning_rate: float = 4e-4
-    max_train_steps: int = 300
-    rank: int = 32
-    lora_alpha: int = 64
+    # Improved training hyperparameters
+    learning_rate: float = 1e-4  # Reduced from 4e-4
+    max_train_steps: int = 2000  # Increased from 300 (10x per image)
+    rank: int = 64  # Increased from 32 for complex style learning
+    lora_alpha: int = 128  # Keep 2x rank ratio
 
+    # LoRA-specific improvements
+    lora_dropout: float = 0.05  # Reduced from 0.1 for style learning
+    lora_bias: str = "none"
+    init_lora_weights: str = "pissa"  # Better initialization for style learning
 
 @dataclass
 class MultiDirectorConfig:
@@ -114,15 +122,27 @@ class MultiDirectorConfig:
                 data_path="/volume/data/villeneuve",
                 trigger_phrase="<villeneuve-style>",
             ),
+            DirectorConfig(
+                name="fincher",
+                style_description="David Fincher cinematic style",
+                data_path="/volume/data/fincher",
+                trigger_phrase="<fincher-style>",
+            ),
+            DirectorConfig(
+                name="scorsese",
+                style_description="Martin Scorsese cinematic style",
+                data_path="/volume/data/scorsese",
+                trigger_phrase="<scorsese-style>",
+            ),
         ]
     )
 
     captions_dataset_path: str = "/volume/labels/captions.json"
 
-    base_model: str = "black-forest-labs/FLUX.1-dev"
+    base_model: str = "black-forest-labs/FLUX.1-Krea-dev"
     resolution: int = 1024
     train_batch_size: int = 4
-    gradient_accumulation_steps: int = 4
+    gradient_accumulation_steps: int = 8
 
     enable_torch_compile: bool = False
     enable_xformers: bool = True
@@ -135,7 +155,12 @@ class MultiDirectorConfig:
     shared_text_encoder: bool = False
 
     num_validation_images: int = 4
-    validation_epochs: int = 50
+    validation_epochs: int = 100
+
+    learning_rate_warmup_steps: int = 100
+    learning_rate_decay: bool = True
+    save_every_n_steps: int = 250
+
 
 
 class DirectorDataset(Dataset):
@@ -170,7 +195,7 @@ class DirectorDataset(Dataset):
     def load_director_data(self):
         """Load and filter data for specific director from main caption dataset."""
 
-        logging.info(f"Loading data for director: {self.director_name}")
+        logger.info(f"Loading data for director: {self.director_name}")
 
         # Load main caption dataset
         with open(self.caption_path, "r") as f:
@@ -196,9 +221,9 @@ class DirectorDataset(Dataset):
                         }
                     )
                 else:
-                    logging.warning(f"Image not found: {image_path}")
+                    logger.warning(f"Image not found: {image_path}")
 
-        logging.info(
+        logger.info(
             f"Loaded {len(self.items)} images for director {self.director_name}"
         )
 
@@ -224,7 +249,7 @@ class DirectorDataset(Dataset):
     def cache_image_latents(self):
         """Pre-cache VAE latents for faster training."""
 
-        logging.info(f"Caching latents for {len(self.items)} images...")
+        logger.info(f"Caching latents for {len(self.items)} images...")
         self.cached_latents = []
 
         with torch.no_grad():
@@ -245,7 +270,7 @@ class DirectorDataset(Dataset):
 
                 self.cached_latents.append(latent.cpu())
 
-        logging.info("Latent caching completed!")
+        logger.info("Latent caching completed!")
 
     def __len__(self):
         return len(self.items)
@@ -271,6 +296,7 @@ class DirectorDataset(Dataset):
             }
 
 
+@app.cls(image=image, gpu="H200", timeout=TIMEOUT)
 class FluxTrainer:
     """High-performance multi-director FLUX LoRA trainer."""
 
@@ -281,6 +307,8 @@ class FluxTrainer:
         self.transformer = None
         self.vae = None
         self.text_encoders = None
+        self.setup_accelerator()
+        self.load_base_models()
 
     def setup_accelerator(self):
         """Initialize accelerator with performance optimizations."""
@@ -308,11 +336,11 @@ class FluxTrainer:
 
                 torch.backends.cuda.enable_flash_sdp(True)
             except ImportError:
-                logging.warning("xformers not available, using default attention")
+                logger.warning("xformers not available, using default attention")
 
     def load_base_models(self):
         """Load base FLUX models and setup text encoders."""
-        logging.info("Loading base FLUX models...")
+        logger.info("Loading base FLUX models...")
 
         # Load pipeline
         self.base_pipeline = FluxPipeline.from_pretrained(
@@ -357,30 +385,51 @@ class FluxTrainer:
                     mode="max-autotune",
                     dynamic=False,
                 )
-                logging.info("Successfully compiled transformer")
+                logger.info("Successfully compiled transformer")
             except Exception as e:
-                logging.warning(f"Failed to compile transformer: {e}")
+                logger.warning(f"Failed to compile transformer: {e}")
 
     def create_director_lora(self, director_config: DirectorConfig) -> str:
         """Create and configure LoRA adapter for a director."""
 
+        # Expanded target modules for better style learning
         target_modules = [
+            # Single transformer blocks (target multiple, not just 0)
             "single_transformer_blocks.0.attn.to_q",
             "single_transformer_blocks.0.attn.to_k",
             "single_transformer_blocks.0.attn.to_v",
             "single_transformer_blocks.0.attn.to_out.0",
             "single_transformer_blocks.0.linear1",
             "single_transformer_blocks.0.linear2",
+            # Add more single blocks for better coverage
+            "single_transformer_blocks.5.attn.to_q",
+            "single_transformer_blocks.5.attn.to_k",
+            "single_transformer_blocks.5.attn.to_v",
+            "single_transformer_blocks.5.attn.to_out.0",
+            "single_transformer_blocks.10.attn.to_q",
+            "single_transformer_blocks.10.attn.to_k",
+            "single_transformer_blocks.10.attn.to_v",
+            "single_transformer_blocks.10.attn.to_out.0",
+            # Add some double transformer blocks for deeper style learning
+            "transformer_blocks.0.attn.to_q",
+            "transformer_blocks.0.attn.to_k",
+            "transformer_blocks.0.attn.to_v",
+            "transformer_blocks.0.attn.to_out.0",
+            "transformer_blocks.5.attn.to_q",
+            "transformer_blocks.5.attn.to_k",
+            "transformer_blocks.5.attn.to_v",
+            "transformer_blocks.5.attn.to_out.0",
         ]
 
         # Create LoRA config with corrected target modules
         lora_config = LoraConfig(
             r=director_config.rank,
             lora_alpha=director_config.lora_alpha,
-            lora_dropout=0.1,
-            init_lora_weights="gaussian",
+            lora_dropout=director_config.lora_dropout,
+            init_lora_weights=director_config.init_lora_weights,
             target_modules=target_modules,
             modules_to_save=None,
+            bias=director_config.lora_bias,
         )
 
         # Add adapter with director-specific name
@@ -389,10 +438,10 @@ class FluxTrainer:
 
         return adapter_name
 
-    async def train_director_async(self, director_config: DirectorConfig) -> str:
-        """Train LoRA adapter for a single director asynchronously."""
+    @modal.method()
+    def train_director(self, director_config: DirectorConfig) -> str:
 
-        logging.info(f"Starting training for director: {director_config.name}")
+        logger.info(f"Starting training for director: {director_config.name}")
 
         # Create director-specific LoRA adapter
         adapter_name = self.create_director_lora(director_config)
@@ -401,7 +450,7 @@ class FluxTrainer:
         self.transformer.set_adapter(adapter_name)
 
         # Load director's dataset with optimizations
-        dataset = await self.load_director_dataset(director_config)
+        dataset = self.load_director_dataset(director_config)
 
         # Create optimized dataloader
         dataloader = DataLoader(
@@ -414,22 +463,22 @@ class FluxTrainer:
         )
 
         # Setup optimizer for this director
-        optimizer = self.setup_optimizer(director_config)
+        optimizer, scheduler = self.setup_optimizer(director_config)
 
         # Prepare with accelerator
         dataloader, optimizer = self.accelerator.prepare(dataloader, optimizer)
 
         # Training loop with optimizations
-        await self.training_loop(director_config, dataloader, optimizer, adapter_name)
+        self.training_loop(director_config, dataloader, optimizer, scheduler, adapter_name)
 
         # Save director's LoRA weights
         output_path = f"{DIRECTORS_DIR}/{director_config.name}"
         self.save_director_lora(adapter_name, output_path)
 
-        logging.info(f"Completed training for director: {director_config.name}")
+        logger.info(f"Completed training for director: {director_config.name}")
         return output_path
 
-    async def load_director_dataset(self, director_config: DirectorConfig):
+    def load_director_dataset(self, director_config: DirectorConfig):
         """Load and preprocess dataset for a director with optimizations."""
 
         dataset = DirectorDataset(
@@ -444,8 +493,6 @@ class FluxTrainer:
         return dataset
 
     def setup_optimizer(self, director_config: DirectorConfig):
-        """Setup optimized optimizer for director training."""
-
         # Get trainable parameters for current adapter
         trainable_params = [p for p in self.transformer.parameters() if p.requires_grad]
 
@@ -457,10 +504,17 @@ class FluxTrainer:
             eps=1e-8,
         )
 
-        return optimizer
+        # Add learning rate scheduler for better convergence
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=director_config.max_train_steps,
+            eta_min=director_config.learning_rate * 0.1
+        )
 
-    async def training_loop(
-        self, director_config: DirectorConfig, dataloader, optimizer, adapter_name: str
+        return optimizer, scheduler
+
+    def training_loop(
+        self, director_config: DirectorConfig, dataloader, optimizer, scheduler, adapter_name: str
     ):
 
         global_step = 0
@@ -483,7 +537,7 @@ class FluxTrainer:
                     with self.accelerator.accumulate(self.transformer):
                         with autocast_ctx:
                             # Forward pass with optimizations
-                            loss = await self.compute_loss(batch)
+                            loss = self.compute_loss(batch)
 
                         # Backward pass
                         self.accelerator.backward(loss)
@@ -495,6 +549,7 @@ class FluxTrainer:
                             )
 
                         optimizer.step()
+                        scheduler.step() # Step scheduler after optimizer step
                         optimizer.zero_grad(set_to_none=True)  # More memory efficient
 
                     if self.accelerator.sync_gradients:
@@ -515,12 +570,12 @@ class FluxTrainer:
 
                         # Validation
                         if global_step % self.config.validation_epochs == 0:
-                            await self.validate_director(director_config, adapter_name)
+                            self.validate_director(director_config, adapter_name)
 
                         if global_step >= director_config.max_train_steps:
                             return
 
-    async def compute_loss(self, batch):
+    def compute_loss(self, batch):
 
         device = self.accelerator.device
         weight_dtype = (
@@ -629,9 +684,20 @@ class FluxTrainer:
 
         # Compute loss using flow matching target
         target = noise - model_input
-        loss = torch.nn.functional.mse_loss(
+        base_loss = torch.nn.functional.mse_loss(
             model_pred.float(), target.float(), reduction="mean"
         )
+
+        # Add perceptual loss for better style learning (optional)
+        if hasattr(self, 'enable_perceptual_loss') and self.enable_perceptual_loss:
+            # Simple MSE in latent space as style consistency loss
+            style_consistency_loss = torch.nn.functional.mse_loss(
+                model_pred.float(), target.float(), reduction="none"
+            ).mean(dim=[2, 3]).std()  # Encourage consistency across spatial dimensions
+
+            loss = base_loss + 0.1 * style_consistency_loss
+        else:
+            loss = base_loss
 
         return loss
 
@@ -698,7 +764,7 @@ class FluxTrainer:
 
         return latent_image_ids
 
-    async def validate_director(
+    def validate_director(
         self, director_config: DirectorConfig, adapter_name: str
     ):
         """Run validation for a director's training."""
@@ -743,7 +809,7 @@ class FluxTrainer:
                     }
                 )
             except ImportError:
-                logging.warning("wandb not available for validation logging")
+                logger.warning("wandb not available for validation logger")
 
             # Clean up pipeline to free memory
             del pipeline
@@ -768,7 +834,7 @@ class FluxTrainer:
             transformer_lora_layers=lora_state_dict,
         )
 
-        logging.info(f"Saved LoRA weights to {output_path}")
+        logger.info(f"Saved LoRA weights to {output_path}")
 
     def setup_text_encoders_and_tokenizers(self):
         """Setup text encoders and tokenizers."""
@@ -977,35 +1043,22 @@ class FluxTrainer:
         return sigma
 
 
-@app.function(
-    gpu="H200",
-    timeout=14400,
-    memory=32768,
-    cpu=8,
-)
-async def train_multi_director(config_dict: dict):
+@app.function(timeout=TIMEOUT)
+def train_multi_director(config_dict: dict):
     """Main training function for multiple directors."""
 
     config = MultiDirectorConfig(**config_dict)
     trainer = FluxTrainer(config)
+    
+    for result in tqdm(
+        trainer.train_director.map(config.directors),
+        total=len(config.directors),
+        desc="Training directors",
+    ):
+        logger.info(f"Training director completed: {result}")
 
-    # Setup
-    trainer.setup_accelerator()
-    trainer.load_base_models()
-
-    if config.sequential_training:
-        # Train directors sequentially for memory efficiency
-        for director_config in config.directors:
-            await trainer.train_director_async(director_config)
-    else:
-        # Train directors in parallel (requires more memory)
-        tasks = [
-            trainer.train_director_async(director_config)
-            for director_config in config.directors
-        ]
-        await asyncio.gather(*tasks)
-
-    logging.info("Multi-director training completed!")
+    # Create director directory if it doesn't exist
+    logger.info("Multi-director training completed!")
     volume.commit()
 
 
@@ -1020,9 +1073,9 @@ def download_flux_model():
     from huggingface_hub import snapshot_download
     from pathlib import Path
 
-    model_name = "black-forest-labs/FLUX.1-dev"
+    model_name = MultiDirectorConfig.base_model
 
-    print(f"🚀 Downloading FLUX model: {model_name}")
+    print(f"🚀 Downloading FLUX Krea model: {model_name}")
     print(f"📁 Target directory: {MODEL_DIR}")
 
     # Create model directory if it doesn't exist

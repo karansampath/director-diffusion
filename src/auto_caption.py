@@ -81,11 +81,11 @@ class Model:
 
         snapshot_download(
             "Qwen/Qwen2.5-VL-3B-Instruct",
-            local_dir="/volume/models/Qwen/Qwen2.5-VL-3B-Instruct",
+            local_dir="/volume/labels/Qwen/Qwen2.5-VL-3B-Instruct",
         )
         self.pipe = pipeline(
             "image-text-to-text",
-            model="/volume/models/Qwen/Qwen2.5-VL-3B-Instruct",
+            model="/volume/labels/Qwen/Qwen2.5-VL-3B-Instruct",
             device_map="auto",
             torch_dtype=torch.bfloat16,
             max_new_tokens=128,
@@ -113,7 +113,17 @@ class Model:
                         {"type": "image", "image": img},
                         {
                             "type": "text",
-                            "text": "Describe this image in detail, focusing on the cinematic style, composition, lighting, and color palette. Then, describe the content of the image. Be as descriptive as possible and do not hallucinate. Use less than 50 words.",
+                            "text": """
+                            You are a professional image annotator for training a director's visual style. Create a caption that:
+
+                            1. Starts with the director's style characteristics in the first sentence
+                            2. Describes cinematographic elements: lighting, composition, color grading
+                            3. Mentions camera techniques: angles, depth of field, framing
+                            4. Notes atmosphere and mood specific to this director's work
+                            5. Keep it under 75 words total
+                            6. Focus on visual elements that make this director's style distinctive
+                            7. Use concrete, specific descriptors rather than generic terms
+                            """,
                         },
                     ],
                 },
@@ -122,9 +132,10 @@ class Model:
             with torch.no_grad():
                 raw_captions = self.pipe(messages, batch_size=1)
             results = []
-            final_caption = (
-                f"{data['style_token']} {extract_assistant_content(raw_captions)}"
-            )
+            final_caption = create_reinforced_caption(
+                            data['style_token'],
+                            extract_assistant_content(raw_captions)
+                        )
             results.append({"file_name": data["image_path"], "text": final_caption})
             return results
 
@@ -143,7 +154,19 @@ def extract_assistant_content(raw_caption):
         return ""
 
 
-@app.function()
+def create_reinforced_caption(style_token, raw_caption):
+    """Create caption that reinforces trigger phrase without dilution."""
+    
+    # Truncate if too long
+    if len(raw_caption.split()) > 75:
+        words = raw_caption.split()[:75]
+        raw_caption = " ".join(words)
+    
+    # Strategic placement: beginning, middle hint, and end
+    return f"{style_token} {raw_caption}, in {style_token} style"
+
+
+@app.function(timeout=1500)
 def process_dataset():
     # Create dataset and dataloader
     dataset = ImageCaptionDataset()
