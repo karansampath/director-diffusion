@@ -13,14 +13,14 @@ from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 from PIL import Image
 from accelerate import Accelerator
-from diffusers import FluxPipeline, AutoencoderKL, FluxTransformer2DModel
+from diffusers import FluxPipeline
 from peft import LoraConfig, get_peft_model_state_dict
 import logging
 from diffusers.training_utils import (
     compute_density_for_timestep_sampling,
 )
 from diffusers import FlowMatchEulerDiscreteScheduler
-from transformers import CLIPTokenizer, T5TokenizerFast, CLIPTextModel  
+from transformers import CLIPTokenizer, T5TokenizerFast  
 import copy
 
 image = (
