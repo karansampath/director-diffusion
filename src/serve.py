@@ -75,7 +75,6 @@ app = modal.App(
     timeout=2000,
     scaledown_window=300,
     min_containers=1,
-    buffer_containers=0,
     volumes={
         "/volume": volume,
         CONTAINER_CACHE_DIR: CONTAINER_CACHE_VOLUME,
@@ -86,7 +85,7 @@ app = modal.App(
 class FluxServeModel:
     """Optimized Modal class for serving Flux model with LoRA support."""
     
-    def _optimize_pipeline(self, pipeline: FluxPipeline) -> None:
+    def _optimize_pipeline(self, pipeline: FluxPipeline, compile_pipeline: bool = True) -> None:
         """Apply optimization techniques from the reference implementation."""
         # Apply first block cache
         apply_cache_on_pipe(pipeline, residual_diff_threshold=0.12)
@@ -99,22 +98,23 @@ class FluxServeModel:
         pipeline.transformer.to(memory_format=torch.channels_last)
         pipeline.vae.to(memory_format=torch.channels_last)
         
-        # Torch compile configuration
-        config = torch._inductor.config
-        config.conv_1x1_as_mm = True
-        config.coordinate_descent_check_all_directions = True
-        config.coordinate_descent_tuning = True
-        config.disable_progress = False
-        config.epilogue_fusion = False
-        config.shape_padding = True
-        
-        # Compile critical components
-        pipeline.transformer = torch.compile(
-            pipeline.transformer, mode="max-autotune-no-cudagraphs", dynamic=True
-        )
-        pipeline.vae.decode = torch.compile(
-            pipeline.vae.decode, mode="max-autotune-no-cudagraphs", dynamic=True
-        )
+        if compile_pipeline:
+            # Torch compile configuration
+            config = torch._inductor.config
+            config.conv_1x1_as_mm = True
+            config.coordinate_descent_check_all_directions = True
+            config.coordinate_descent_tuning = True
+            config.disable_progress = False
+            config.epilogue_fusion = False
+            config.shape_padding = True
+            
+            # Compile critical components
+            pipeline.transformer = torch.compile(
+                pipeline.transformer, mode="max-autotune-no-cudagraphs", dynamic=True
+            )
+            pipeline.vae.decode = torch.compile(
+                pipeline.vae.decode, mode="max-autotune-no-cudagraphs", dynamic=True
+            )
     
     def _load_mega_cache(self) -> None:
         """Load torch mega-cache if available."""
@@ -156,8 +156,15 @@ class FluxServeModel:
                     raise
             post_grad.same_meta = _safe_same_meta
         
-        # Trigger compilation
-        self.base_pipeline("dummy prompt", height=1024, width=1024, num_images_per_prompt=1)
+        # Trigger compilation with short dummy run
+        dummy_result = self.base_pipeline(
+            "test", 
+            height=512,  # Smaller size for compilation
+            width=512, 
+            num_inference_steps=4,  # Much fewer steps for compilation
+            guidance_scale=3.5,
+            max_sequence_length=256,
+        )
         logger.info("Pipeline compiled")
     
     def _discover_loras(self) -> None:
@@ -196,6 +203,7 @@ class FluxServeModel:
         ).to("cpu")
         
         self.available_loras = {}
+        self.current_lora = None  # Track currently loaded LoRA
         
         # Set up cache paths
         cache_dir = CONTAINER_CACHE_DIR / ".mega_cache"
@@ -209,10 +217,25 @@ class FluxServeModel:
         """Setup and optimize model (not snapshotted)."""
         self.base_pipeline.to("cuda")
         
+        # Create separate pipeline for LoRA inference (uncompiled for faster switching)
+        logger.info("Creating LoRA pipeline (uncompiled)...")
+        self.lora_pipeline = FluxPipeline.from_pretrained(
+            MODEL_DIR,
+            torch_dtype=torch.bfloat16,
+            use_safetensors=True,
+        ).to("cuda")
+        
         self._load_mega_cache()
-        self._optimize_pipeline(self.base_pipeline)
+        
+        # Optimize base pipeline with compilation
+        logger.info("Optimizing base pipeline (compiled)...")
+        self._optimize_pipeline(self.base_pipeline, compile_pipeline=True)
         self._compile_pipeline()
         self._save_mega_cache()
+        
+        # Optimize LoRA pipeline without compilation
+        logger.info("Optimizing LoRA pipeline (uncompiled)...")
+        self._optimize_pipeline(self.lora_pipeline, compile_pipeline=False)
         
         self._discover_loras()
         self.config = InferenceConfig()
@@ -230,7 +253,25 @@ class FluxServeModel:
             for name, lora in self.available_loras.items()
         }
     
-    @modal.method()
+    def _load_lora_if_needed(self, lora_name: Optional[str]) -> bool:
+        """Load LoRA only if different from current."""
+        if lora_name == self.current_lora:
+            return self.current_lora is not None
+        
+        # Unload current LoRA if any
+        if self.current_lora is not None:
+            self.lora_pipeline.unload_lora_weights()
+            self.current_lora = None
+        
+        # Load new LoRA if specified
+        if lora_name and lora_name in self.available_loras:
+            lora_info = self.available_loras[lora_name]
+            self.lora_pipeline.load_lora_weights(lora_info.path)
+            self.current_lora = lora_name
+            return True
+        
+        return False
+    
     def generate_image(
         self, 
         prompt: str, 
@@ -240,16 +281,20 @@ class FluxServeModel:
         """Generate image with optional LoRA."""
         if seed is not None:
             torch.manual_seed(seed)
-            
-        pipeline = self.base_pipeline
-        lora_loaded = False
         
-        # Load LoRA if specified
-        if lora_name and lora_name in self.available_loras:
+        # Determine which pipeline to use
+        if lora_name is None:
+            # Use compiled base pipeline for base model inference
+            pipeline = self.base_pipeline
+            lora_loaded = False
+        else:
+            # Use uncompiled LoRA pipeline for LoRA inference
+            pipeline = self.lora_pipeline
+            lora_loaded = self._load_lora_if_needed(lora_name)
+        
+        # Add trigger phrase if LoRA is loaded
+        if lora_loaded and lora_name in self.available_loras:
             lora_info = self.available_loras[lora_name]
-            pipeline.load_lora_weights(lora_info.path)
-            lora_loaded = True
-            
             if lora_info.trigger_phrase not in prompt:
                 prompt = f"{lora_info.trigger_phrase} {prompt}"
         
@@ -270,12 +315,9 @@ class FluxServeModel:
         
         torch.cuda.synchronize()
         inference_time = time.perf_counter() - start_time
-        logger.info(f"Inference time: {inference_time:.2f}s")
+        pipeline_type = "compiled base" if lora_name is None else "uncompiled LoRA"
+        logger.info(f"Inference time ({pipeline_type}): {inference_time:.2f}s")
         
-        # Unload LoRA
-        if lora_loaded:
-            pipeline.unload_lora_weights()
-            
         # Convert to bytes
         buffer = io.BytesIO()
         result.images[0].save(buffer, format="PNG")
@@ -288,10 +330,23 @@ class FluxServeModel:
         lora_name: str,
         seed: Optional[int] = None
     ) -> tuple[bytes, bytes]:
-        """Generate comparison images."""
-        base_image = self.generate_image.remote(prompt, lora_name=None, seed=seed)
-        lora_image = self.generate_image.remote(prompt, lora_name=lora_name, seed=seed)
+        """Generate comparison images efficiently."""
+        # Generate base image first
+        base_image = self.generate_image(prompt, lora_name=None, seed=seed)
+        
+        # Generate LoRA image second (LoRA will be loaded only once)
+        lora_image = self.generate_image(prompt, lora_name=lora_name, seed=seed)
+        
         return base_image, lora_image
+
+    def generate_single(
+        self, 
+        prompt: str, 
+        lora_name: Optional[str] = None,
+        seed: Optional[int] = None
+    ) -> bytes:
+        """Generate single image - faster for non-comparison use."""
+        return self.generate_image(prompt, lora_name=lora_name, seed=seed)
 
 
 @app.function(
@@ -328,7 +383,6 @@ def gradio_app():
             return None, None
             
         # For comparison, we need at least one LoRA to compare against base
-        # If "None" is selected, we can't do a meaningful comparison
         if lora_selection == "None":
             logger.warning("No LoRA selected for comparison - need a LoRA to compare against base model")
             return None, None
@@ -349,6 +403,28 @@ def gradio_app():
         except Exception as e:
             logger.error(f"Generation failed: {e}")
             return None, None
+    
+    # Single image generation function
+    def generate_single_image(
+        prompt: str,
+        lora_selection: str,
+        seed: Optional[int] = None,
+    ) -> Optional[Image.Image]:
+        """Generate single image - faster for testing."""
+        if not prompt.strip():
+            return None
+            
+        try:
+            lora_name = None if lora_selection == "None" else lora_selection
+            image_bytes = model.generate_single.remote(
+                prompt=prompt,
+                lora_name=lora_name,
+                seed=seed,
+            )
+            return Image.open(io.BytesIO(image_bytes))
+        except Exception as e:
+            logger.error(f"Single generation failed: {e}")
+            return None
     
     def generate_blind_comparison(
         prompt: str,
@@ -472,6 +548,22 @@ def gradio_app():
         gr.Markdown(description)
         
         with gr.Tabs():
+            # Quick Test Tab - for faster single image generation
+            with gr.Tab("Quick Test"):
+                with gr.Row():
+                    with gr.Column():
+                        quick_inputs = create_inputs()
+                        quick_button = gr.Button("Generate Single Image", variant="primary")
+                    
+                with gr.Row():
+                    quick_output = gr.Image(label="Generated Image", height=512)
+                
+                quick_button.click(
+                    fn=generate_single_image,
+                    inputs=quick_inputs,
+                    outputs=[quick_output]
+                )
+            
             # Comparison Tab
             with gr.Tab("Comparison"):
                 with gr.Row():
