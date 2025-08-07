@@ -2,7 +2,6 @@
 
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import List
 import json
 from contextlib import nullcontext
 from tqdm import tqdm
@@ -22,6 +21,8 @@ from diffusers.training_utils import (
 from diffusers import FlowMatchEulerDiscreteScheduler
 from transformers import CLIPTokenizer, T5TokenizerFast  
 import copy
+
+from src.config import MODEL_DIR, DIRECTORS_DIR, volume, huggingface_secret, wandb_secret
 
 image = (
     modal.Image.from_registry(
@@ -56,12 +57,6 @@ image = (
     )
 )
 
-volume = modal.Volume.from_name("director-diffusion", create_if_missing=True)
-huggingface_secret = modal.Secret.from_name(
-    "huggingface-secret", required_keys=["HF_TOKEN"]
-)
-wandb_secret = modal.Secret.from_name("wandb-secret", required_keys=["WANDB_API_KEY"])
-
 app = modal.App(
     name="multi-director-flux-train",
     image=image,
@@ -69,8 +64,6 @@ app = modal.App(
     secrets=[huggingface_secret, wandb_secret],
 )
 
-MODEL_DIR = "/volume/flux-krea"
-DIRECTORS_DIR = "/volume/director_loras"
 TIMEOUT = 40000
 
 # Configure logger
@@ -80,7 +73,6 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class DirectorConfig:
-    """Configuration for a single director's training."""
 
     name: str
     style_description: str
@@ -100,9 +92,8 @@ class DirectorConfig:
 
 @dataclass
 class MultiDirectorConfig:
-    """Configuration for multi-director training pipeline."""
 
-    directors: List[DirectorConfig] = field(
+    directors: list[DirectorConfig] = field(
         default_factory=lambda: [
             DirectorConfig(
                 name="anderson",
@@ -493,7 +484,6 @@ class FluxTrainer:
         return dataset
 
     def setup_optimizer(self, director_config: DirectorConfig):
-        # Get trainable parameters for current adapter
         trainable_params = [p for p in self.transformer.parameters() if p.requires_grad]
 
         optimizer = torch.optim.AdamW(
@@ -504,7 +494,6 @@ class FluxTrainer:
             eps=1e-8,
         )
 
-        # Add learning rate scheduler for better convergence
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer,
             T_max=director_config.max_train_steps,
@@ -688,9 +677,7 @@ class FluxTrainer:
             model_pred.float(), target.float(), reduction="mean"
         )
 
-        # Add perceptual loss for better style learning (optional)
         if hasattr(self, 'enable_perceptual_loss') and self.enable_perceptual_loss:
-            # Simple MSE in latent space as style consistency loss
             style_consistency_loss = torch.nn.functional.mse_loss(
                 model_pred.float(), target.float(), reduction="none"
             ).mean(dim=[2, 3]).std()  # Encourage consistency across spatial dimensions
@@ -703,8 +690,6 @@ class FluxTrainer:
 
     def _pack_latents(self, latents, batch_size, num_channels_latents, height, width):
         """Pack latents for FLUX transformer input."""
-        # FLUX packing: convert from (B, 16, H, W) to (B, H*W/4, 64)
-        # FLUX uses 16 input channels and packs them to 64 channels
         latents = latents.view(
             batch_size, num_channels_latents, height // 2, 2, width // 2, 2
         )
@@ -722,7 +707,6 @@ class FluxTrainer:
         latent_height = height
         latent_width = width
 
-        # FLUX unpacking: convert from (B, H*W/4, 64) back to (B, 16, H, W)
         channels_per_patch = channels // 4  # 64 // 4 = 16
         patches_per_dim_h = latent_height // patch_size
         patches_per_dim_w = latent_width // patch_size
@@ -743,11 +727,9 @@ class FluxTrainer:
 
     def _prepare_latent_image_ids(self, height, width):
         """Prepare image IDs for FLUX transformer as a 2D tensor."""
-        # Calculate latent dimensions (VAE downscales by 8x)
         latent_height = height // 8
         latent_width = width // 8
 
-        # Create position IDs for patches (2x2 packing)
         patch_height = latent_height // 2
         patch_width = latent_width // 2
 
@@ -759,7 +741,6 @@ class FluxTrainer:
             latent_image_ids[..., 2] + torch.arange(patch_width)[None, :]
         )
 
-        # Flatten to sequence
         latent_image_ids = latent_image_ids.reshape(patch_height * patch_width, 3)
 
         return latent_image_ids

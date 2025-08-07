@@ -1,6 +1,28 @@
 # director-diffusion
 
-Director-Diffusion is an open-source package to train 
+<p align="center">
+  <a href="https://gradio.app/" target="_blank">
+    <img src="https://raw.githubusercontent.com/gradio-app/gradio/main/assets/logo.svg" alt="Gradio Logo" width="120" />
+  </a>
+  <br>
+  <a href="https://nano-diffusion--flux-lora-gradio-gradio-app.modal.run/" target="_blank">
+    <b>Try the Director-Diffusion Gradio App &rarr;</b>
+  </a>
+</p>
+
+
+Director-Diffusion is an open-source package to train Low Rank Adaptation Matrices of the Flux1.Krea-dev model to fit the style of famous directors. The directors chosen in this package are Christopher Nolan, Martin Scorsese, Wes Anderson, Denis Villeneuve, and David Fincher. They are so chosen for their unique styles and my personal affinity for their work.
+
+
+
+## Roadmap
+
+- [x] Image Collection
+- [x] Caption data and verify performance
+- [x] Train base LoRAs
+- [x] Serve model off Gradio App
+- [ ] Evaluate using Frechet Inception Distance (FID) and CLIP Score
+- [ ] Create LCM distillation
 
 ## Uses
 
@@ -12,14 +34,13 @@ Director-Diffusion is an open-source package to train
 - shotdeck (https://shotdeck.com/welcome/home) and ffmpeg for training stills and data
 - Qwen 2.5VL - 3B for image captioning
 
-
 ## Getting Started
 
-To run the code, sync the uv environment and run the following commands:
+To run the code, sync the uv environment (`uv sync`) and run the following commands:
 
-- captioning: `uv run modal run -m src.auto_caption`. You can then upload the images 
-- train: `uv run modal run -m src.train`. You will likely need to add the `detach` flag as well
-- serve: `uv run modal serve -m src.serve`.
+- captioning: `uv run modal run -m src.caption`. You can then upload the images to remote modal storage using `modal volume`.
+- train: `uv run modal run -m src.train`. You will likely need to add the `detach` flag as well to ensure that the train run does not get limited by session length.
+- serve: `uv run modal deploy -m src.serve`, `uv run modal serve -m src.serve` (for local dev).
 
 
 ## Considerations
@@ -30,24 +51,24 @@ No BLIP-2
 
 ## Dataset
 
-🎬 Director Counts:
-========================================
-anderson         201 images
-fincher          214 images
-nolan            232 images
-scorsese         215 images
-villeneuve       197 images
+Images were collected from shotdeck.com. Director counts for each image are listed below:
+
+- Anderson: 201 images
+- Fincher: 214 images
+- Nolan: 232 images
+- Scorsese: 215 images
+- Villeneuve: 197 images
 
 ## Acknowledgments
-I'd like to thank Alec Powell and the team at Modal for their help in giving me GPU credits to help complete this work. Also thank you to the team at Astral for their great open-source work!
+I'd like to thank Alec Powell and the team at Modal for their support of this work through GPU credits. Also, thank you to the team at Astral for their great open-source work!
 
 ## Relevant Papers and Blog posts
 
-https://www.krea.ai/blog/flux-krea-open-source-release
-https://modal.com/blog/flux-3x-faster
-https://modal.com/docs/examples/diffusers_lora_finetune
-https://arxiv.org/pdf/2210.03142
-https://arxiv.org/abs/2407.15811
-https://arxiv.org/abs/2006.11239
-https://arxiv.org/abs/2010.02502
-https://arxiv.org/abs/2207.12598
+- https://www.krea.ai/blog/flux-krea-open-source-release
+- https://modal.com/blog/flux-3x-faster
+- https://modal.com/docs/examples/diffusers_lora_finetune
+- https://arxiv.org/pdf/2210.03142
+- https://arxiv.org/abs/2407.15811
+- https://arxiv.org/abs/2006.11239
+- https://arxiv.org/abs/2010.02502
+- https://arxiv.org/abs/2207.12598

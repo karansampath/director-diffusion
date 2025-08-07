@@ -1,16 +1,74 @@
 #!/usr/bin/env python
-"""
-Configuration module for Flux LoRA Gradio app.
-"""
 
 from dataclasses import dataclass
-from typing import List
 
+import modal
+
+# Modal infrastructure
+volume = modal.Volume.from_name("director-diffusion", create_if_missing=True)
+huggingface_secret = modal.Secret.from_name(
+    "huggingface-secret", required_keys=["HF_TOKEN"]
+)
+wandb_secret = modal.Secret.from_name("wandb-secret", required_keys=["WANDB_API_KEY"])
+
+# Directory paths
+MODEL_DIR = "/volume/flux-krea"
+DIRECTORS_DIR = "/volume/director_loras"
+
+DIRECTOR_MAP = {
+    "anderson": "Wes Anderson",
+    "fincher": "David Fincher", 
+    "nolan": "Christopher Nolan",
+    "scorsese": "Martin Scorsese",
+    "villeneuve": "Denis Villeneuve"
+}
 
 @dataclass
-class GradioConfig:
-    """Configuration for Gradio app settings."""
+class EvaluationConfig:
+    """Configuration for LoRA vs Base model evaluation."""
     
+    # Test prompts for each director style
+    test_prompts: list[str] = None
+    
+    # Number of images to generate per prompt/director combo
+    num_samples_per_test: int = 3
+    
+    # Inference settings for evaluation
+    eval_num_inference_steps: int = 20  # Faster for evaluation
+    eval_guidance_scale: float = 3.5
+    eval_resolution: int = 1024
+    
+    # Seeds for reproducible evaluation
+    eval_seeds: list[int] = None
+    
+    # Metrics to compute
+    compute_clip_similarity: bool = True
+    compute_aesthetic_score: bool = True
+    compute_style_consistency: bool = True
+    compute_prompt_adherence: bool = True
+    
+    # Cost optimization
+    use_smaller_clip_model: bool = True  # Use ViT-B/32 instead of ViT-L/14
+    batch_evaluation: bool = True
+    
+    def __post_init__(self):
+        if self.test_prompts is None:
+            self.test_prompts = [
+                "a cinematic portrait of a person in dramatic lighting",
+                "a symmetrical architectural interior",
+                "a moody urban landscape at night",
+                "a minimalist still life composition",
+                "a wide shot of a futuristic cityscape",
+                "a close-up of hands holding an object",
+                "a person walking down a long corridor",
+                "a group of people in formal attire"
+            ]
+        
+        if self.eval_seeds is None:
+            self.eval_seeds = [42, 123, 456, 789, 999]
+
+@dataclass 
+class GradioConfig:
     title: str = "Flux LoRA Comparison"
     description: str = "Compare your LoRA finetuned Flux model with the base model"
     theme: str = "Soft"  # Gradio theme
@@ -18,7 +76,7 @@ class GradioConfig:
     show_error: bool = True
     
     # Example prompts for the interface
-    example_prompts: List[str] = None
+    example_prompts: list[str] = None
     
     def __post_init__(self):
         if self.example_prompts is None:
@@ -31,11 +89,8 @@ class GradioConfig:
                 "a minimalist geometric composition",
             ]
 
-
 @dataclass
 class InferenceConfig:
-    """Configuration for inference parameters."""
-    
     num_inference_steps: int = 28
     guidance_scale: float = 3.5
     height: int = 1024
@@ -47,11 +102,8 @@ class InferenceConfig:
     enable_xformers: bool = True
     cache_pipelines: bool = True
 
-
 @dataclass
 class LoRAInfo:
-    """Information about a LoRA adapter."""
-    
     name: str
     path: str
     trigger_phrase: str

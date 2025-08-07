@@ -86,7 +86,6 @@ def analyze_directors():
 
 @app.local_entrypoint()
 def main():
-    """Main entry point."""
     analyze_directors.remote()
 
 

@@ -103,7 +103,6 @@ class Model:
 
     @modal.method()
     def caption_image(self, data):
-        """Process a batch of images for captioning."""
         try:
             img = self.preprocess_image(data["image_path"])
             messages = [

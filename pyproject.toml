@@ -23,4 +23,5 @@ dependencies = [
     "peft>=0.16.0",
     "gradio>=5.39.0",
     "para-attn>=0.3.38",
+    "open-clip-torch>=2.0.0",
 ]
