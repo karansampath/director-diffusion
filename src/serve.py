@@ -14,6 +14,7 @@ from diffusers import FluxPipeline
 from para_attn.first_block_cache.diffusers_adapters import apply_cache_on_pipe
 
 from src.config import InferenceConfig, LoRAInfo, MODEL_DIR, DIRECTORS_DIR, DIRECTOR_MAP, volume, huggingface_secret
+from src.utils import CUSTOM_GRADIO_THEME
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 # Common configuration
 CONTAINER_CACHE_DIR = Path("/cache")
 CONTAINER_CACHE_VOLUME = modal.Volume.from_name("flux_lora_cache", create_if_missing=True)
-
+ENABLE_COMPILATION = False
 # Optimized Modal image
 image = (
     modal.Image.from_registry(
@@ -82,6 +83,7 @@ app = modal.App(
 )
 class FluxServeModel:
     """Optimized Modal class for serving Flux model with LoRA support."""
+    enable_compilation: bool = modal.parameter(default=ENABLE_COMPILATION)
     
     def _optimize_pipeline(self, pipeline: FluxPipeline, compile_pipeline: bool = True) -> None:
         """Apply optimization techniques from the reference implementation."""
@@ -225,11 +227,15 @@ class FluxServeModel:
         
         self._load_mega_cache()
         
-        # Optimize base pipeline with compilation
-        logger.info("Optimizing base pipeline (compiled)...")
-        self._optimize_pipeline(self.base_pipeline, compile_pipeline=True)
-        self._compile_pipeline()
-        self._save_mega_cache()
+        # Optimize base pipeline with conditional compilation
+        if self.enable_compilation:
+            logger.info("Optimizing base pipeline (compiled)...")
+            self._optimize_pipeline(self.base_pipeline, compile_pipeline=True)
+            self._compile_pipeline()
+            self._save_mega_cache()
+        else:
+            logger.info("Optimizing base pipeline (uncompiled - compilation disabled)...")
+            self._optimize_pipeline(self.base_pipeline, compile_pipeline=False)
         
         # Optimize LoRA pipeline without compilation
         logger.info("Optimizing LoRA pipeline (uncompiled)...")
@@ -362,13 +368,18 @@ class FluxServeModel:
 @modal.concurrent(max_inputs=100)
 @modal.asgi_app()
 def gradio_app():
-    """Create Gradio interface with comparison and blind voting tabs."""
+    """Create Gradio interface with comparison and blind voting tabs.
+    
+    Args:
+        enable_compilation: Whether to enable torch compilation for faster inference.
+    """
     
     import gradio as gr
     from fastapi import FastAPI
     from gradio.routes import mount_gradio_app
     
-    model = FluxServeModel()
+    
+    model = FluxServeModel(enable_compilation=ENABLE_COMPILATION)
     
     # Director mapping
     DIRECTOR_MAP = {
@@ -543,308 +554,6 @@ def gradio_app():
         ["A complex maze-like architecture", "nolan"]
     ]
     
-    # Custom CSS for light pastel theme with dark text
-    custom_css = """
-    @import url('https://fonts.googleapis.com/css2?family=EB+Garamond:wght@400;500;600&display=swap');
-    
-    /* ROOT THEME OVERRIDES - Force light theme */
-    :root {
-        --background-fill-primary: #ffffff;
-        --background-fill-secondary: #f8f9fa;
-        --color-accent: #87ceeb;
-        --color-text-label: #1a1a1a;
-        --color-text-body: #2c3e50;
-        --neutral-950: #1a1a1a;
-        --neutral-900: #2c3e50;
-        --neutral-800: #34495e;
-        --neutral-700: #5a6c7d;
-    }
-    
-    /* MAIN CONTAINER - Light pastel background */
-    .gradio-container, .gradio-container.gradio-container {
-        font-family: 'EB Garamond', 'Times New Roman', serif !important;
-        background: linear-gradient(135deg, #faf8ff 0%, #f0f8ff 25%, #e8f4fd 50%, #f5f1ff 75%, #faf8ff 100%) !important;
-        color: #1a1a1a !important;
-        min-height: 100vh !important;
-    }
-    
-    /* ALL TEXT ELEMENTS - Dark text for readability */
-    *, *::before, *::after {
-        color: #1a1a1a !important;
-    }
-    
-    /* HEADINGS - Dark and bold */
-    h1, h2, h3, h4, h5, h6 {
-        font-family: 'EB Garamond', serif !important;
-        color: #1a1a1a !important;
-        font-weight: 600 !important;
-        text-shadow: none !important;
-        margin: 0.5em 0 !important;
-    }
-    
-    h1 { font-size: 2.5rem !important; }
-    h2 { font-size: 2rem !important; }
-    h3 { font-size: 1.5rem !important; }
-    
-    /* PARAGRAPHS AND BODY TEXT */
-    p, div, span, li, td, th {
-        color: #2c3e50 !important;
-        font-family: 'EB Garamond', serif !important;
-        line-height: 1.6 !important;
-    }
-    
-    /* LABELS - Dark and prominent */
-    label, .gr-label {
-        color: #1a1a1a !important;
-        font-family: 'EB Garamond', serif !important;
-        font-weight: 600 !important;
-        font-size: 1.1rem !important;
-        margin-bottom: 8px !important;
-    }
-    
-    /* PRIMARY BUTTONS - Light blue with dark text */
-    .gr-button-primary {
-        background: linear-gradient(135deg, #b8e6f0 0%, #a8d8ea 100%) !important;
-        border: 2px solid rgba(135, 206, 235, 0.4) !important;
-        border-radius: 12px !important;
-        font-family: 'EB Garamond', serif !important;
-        font-weight: 600 !important;
-        color: #1a1a1a !important;
-        font-size: 1.1rem !important;
-        padding: 12px 24px !important;
-        box-shadow: 0 4px 12px rgba(135, 206, 235, 0.25) !important;
-        transition: all 0.3s ease !important;
-        text-transform: none !important;
-    }
-    
-    .gr-button-primary:hover {
-        background: linear-gradient(135deg, #a8d8ea 0%, #87ceeb 100%) !important;
-        transform: translateY(-2px) !important;
-        box-shadow: 0 6px 16px rgba(135, 206, 235, 0.35) !important;
-        border-color: #87ceeb !important;
-        color: #1a1a1a !important;
-    }
-    
-    /* SECONDARY BUTTONS - Light lavender with dark text */
-    .gr-button-secondary {
-        background: linear-gradient(135deg, #e8d5ff 0%, #ddb3ff 100%) !important;
-        border: 2px solid rgba(221, 179, 255, 0.4) !important;
-        border-radius: 12px !important;
-        font-family: 'EB Garamond', serif !important;
-        font-weight: 600 !important;
-        color: #1a1a1a !important;
-        font-size: 1.1rem !important;
-        padding: 12px 24px !important;
-        box-shadow: 0 4px 12px rgba(221, 179, 255, 0.25) !important;
-        transition: all 0.3s ease !important;
-        text-transform: none !important;
-    }
-    
-    .gr-button-secondary:hover {
-        background: linear-gradient(135deg, #ddb3ff 0%, #c8a2c8 100%) !important;
-        transform: translateY(-2px) !important;
-        box-shadow: 0 6px 16px rgba(221, 179, 255, 0.35) !important;
-        border-color: #c8a2c8 !important;
-        color: #1a1a1a !important;
-    }
-    
-    /* PANELS AND CONTAINERS - Clean white backgrounds */
-    .gr-panel, .gr-block, .gr-form, .gr-box {
-        background: rgba(255, 255, 255, 0.9) !important;
-        border: 2px solid rgba(168, 216, 234, 0.25) !important;
-        border-radius: 16px !important;
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.06) !important;
-        backdrop-filter: blur(16px) !important;
-        padding: 20px !important;
-        margin: 10px 0 !important;
-    }
-    
-    /* INPUT FIELDS - Pure white with dark text */
-    .gr-textbox, .gr-dropdown, .gr-number,
-    .gr-textbox textarea, .gr-textbox input,
-    .gr-dropdown select, .gr-number input,
-    textarea, input[type="text"], input[type="number"],
-    div[data-testid="textbox"] textarea,
-    div[data-testid="textbox"] input,
-    div[data-testid="number-input"] input {
-        background: #ffffff !important;
-        background-color: #ffffff !important;
-        border: 2px solid rgba(168, 216, 234, 0.5) !important;
-        border-radius: 10px !important;
-        font-family: 'EB Garamond', serif !important;
-        color: #1a1a1a !important;
-        font-size: 16px !important;
-        font-weight: 500 !important;
-        padding: 14px 16px !important;
-        transition: all 0.3s ease !important;
-        box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.05) !important;
-    }
-    
-    /* INPUT FOCUS STATES */
-    .gr-textbox:focus, .gr-dropdown:focus, .gr-number:focus,
-    .gr-textbox textarea:focus, .gr-textbox input:focus,
-    .gr-dropdown select:focus, .gr-number input:focus,
-    textarea:focus, input[type="text"]:focus, input[type="number"]:focus {
-        border-color: #87ceeb !important;
-        box-shadow: 0 0 0 3px rgba(135, 206, 235, 0.2), inset 0 1px 3px rgba(0, 0, 0, 0.05) !important;
-        outline: none !important;
-        background: #ffffff !important;
-        background-color: #ffffff !important;
-        color: #1a1a1a !important;
-    }
-    
-    /* PLACEHOLDER TEXT */
-    ::placeholder {
-        color: #6c757d !important;
-        opacity: 0.8 !important;
-        font-style: italic !important;
-    }
-    
-    /* DROPDOWN SPECIFICS */
-    .gr-dropdown .wrap, 
-    div[data-testid="dropdown"] {
-        background: #ffffff !important;
-        background-color: #ffffff !important;
-    }
-    
-    .gr-dropdown option {
-        background: #ffffff !important;
-        color: #1a1a1a !important;
-    }
-    
-    /* TAB NAVIGATION */
-    .gr-tab-nav {
-        background: rgba(255, 255, 255, 0.8) !important;
-        border-radius: 14px !important;
-        padding: 6px !important;
-        margin-bottom: 24px !important;
-        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.05) !important;
-    }
-    
-    .gr-tab-nav .gr-tab {
-        color: #2c3e50 !important;
-        font-family: 'EB Garamond', serif !important;
-        font-weight: 500 !important;
-        font-size: 1.1rem !important;
-        border-radius: 10px !important;
-        transition: all 0.3s ease !important;
-        background: transparent !important;
-        padding: 12px 20px !important;
-    }
-    
-    .gr-tab-nav .gr-tab.selected {
-        background: linear-gradient(135deg, #b8e6f0 0%, #a8d8ea 100%) !important;
-        color: #1a1a1a !important;
-        font-weight: 600 !important;
-        box-shadow: 0 4px 12px rgba(168, 216, 234, 0.3) !important;
-    }
-    
-    .gr-tab-nav .gr-tab:hover:not(.selected) {
-        background: rgba(168, 216, 234, 0.15) !important;
-        color: #1a1a1a !important;
-    }
-    
-    /* SPECIAL CONTENT BOXES */
-    .director-info {
-        background: linear-gradient(135deg, rgba(168, 216, 234, 0.15) 0%, rgba(221, 179, 255, 0.1) 100%) !important;
-        border: 2px solid rgba(168, 216, 234, 0.4) !important;
-        border-left: 6px solid #87ceeb !important;
-        padding: 24px !important;
-        margin: 24px 0 !important;
-        border-radius: 14px !important;
-        color: #1a1a1a !important;
-        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.05) !important;
-    }
-    
-    .director-info h2, .director-info h3 {
-        color: #1a1a1a !important;
-        margin-bottom: 16px !important;
-    }
-    
-    /* MARKDOWN CONTENT */
-    .gr-markdown, .gr-markdown * {
-        color: #2c3e50 !important;
-        line-height: 1.7 !important;
-    }
-    
-    .gr-markdown h1, .gr-markdown h2, .gr-markdown h3 {
-        color: #1a1a1a !important;
-        font-weight: 600 !important;
-    }
-    
-    .gr-markdown p {
-        color: #2c3e50 !important;
-        margin: 12px 0 !important;
-    }
-    
-    .gr-markdown strong {
-        color: #1a1a1a !important;
-        font-weight: 600 !important;
-    }
-    
-    /* ACCORDIONS */
-    .gr-accordion {
-        background: rgba(255, 255, 255, 0.9) !important;
-        border: 2px solid rgba(168, 216, 234, 0.25) !important;
-        border-radius: 14px !important;
-        margin: 12px 0 !important;
-        overflow: hidden !important;
-    }
-    
-    .gr-accordion .gr-accordion-header {
-        color: #1a1a1a !important;
-        font-family: 'EB Garamond', serif !important;
-        font-weight: 600 !important;
-        font-size: 1.1rem !important;
-        background: rgba(168, 216, 234, 0.08) !important;
-        padding: 16px 20px !important;
-    }
-    
-    /* IMAGES */
-    .gr-image {
-        border-radius: 14px !important;
-        overflow: hidden !important;
-        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12) !important;
-        border: 2px solid rgba(168, 216, 234, 0.2) !important;
-    }
-    
-    /* EXAMPLES */
-    .gr-examples {
-        background: rgba(255, 255, 255, 0.8) !important;
-        border: 2px solid rgba(168, 216, 234, 0.2) !important;
-        border-radius: 14px !important;
-        padding: 20px !important;
-        margin-top: 20px !important;
-    }
-    
-    /* INFO AND HELPER TEXT */
-    .gr-info {
-        color: #5a6c7d !important;
-        font-style: italic !important;
-        font-size: 0.95rem !important;
-    }
-    
-    /* OVERRIDE DARK THEME COMPLETELY */
-    .dark, [data-theme="dark"] {
-        background: #faf8ff !important;
-        color: #1a1a1a !important;
-    }
-    
-    .dark .gr-textbox, .dark .gr-dropdown, .dark .gr-number,
-    .dark textarea, .dark input {
-        background: #ffffff !important;
-        background-color: #ffffff !important;
-        color: #1a1a1a !important;
-        border-color: rgba(168, 216, 234, 0.5) !important;
-    }
-    
-    /* ENSURE ALL INTERACTIVE ELEMENTS HAVE DARK TEXT */
-    .gr-button, .gr-textbox, .gr-dropdown, .gr-number, .gr-slider,
-    button, input, textarea, select {
-        color: #1a1a1a !important;
-    }
-    """
-    
     # Common input components
     def create_inputs():
         lora_options = get_lora_options()
@@ -879,7 +588,7 @@ def gradio_app():
         return base_inputs + [seed_input]
     
     # Create main interface with favicon support
-    with gr.Blocks(css=custom_css, title=title, head='<link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMzIiIGhlaWdodD0iMzIiIHZpZXdCb3g9IjAgMCAzMiAzMiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iNCIgZmlsbD0iIzFhMWEyZSIvPgo8Y2lyY2xlIGN4PSIxNiIgY3k9IjE2IiByPSI2IiBzdHJva2U9IiNkNGFmMzciIHN0cm9rZS13aWR0aD0iMiIgZmlsbD0ibm9uZSIvPgo8Y2lyY2xlIGN4PSIxNiIgY3k9IjE2IiByPSIyIiBmaWxsPSIjZDRhZjM3Ii8+CjwvHN2Zz4K">') as demo:
+    with gr.Blocks(css=CUSTOM_GRADIO_THEME, title=title, head='<link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMzIiIGhlaWdodD0iMzIiIHZpZXdCb3g9IjAgMCAzMiAzMiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iNCIgZmlsbD0iIzFhMWEyZSIvPgo8Y2lyY2xlIGN4PSIxNiIgY3k9IjE2IiByPSI2IiBzdHJva2U9IiNkNGFmMzciIHN0cm9rZS13aWR0aD0iMiIgZmlsbD0ibm9uZSIvPgo8Y2lyY2xlIGN4PSIxNiIgY3k9IjE2IiByPSIyIiBmaWxsPSIjZDRhZjM3Ii8+CjwvHN2Zz4K">') as demo:
         
         # Header
         gr.Markdown(f"# {title}")
@@ -894,15 +603,15 @@ def gradio_app():
                 
                 *by [Karan Sampath](https://www.karansampath.com) | [Contact](mailto:me@karansampath.com)*
                 
-                I built **Director-Diffusion** as an AI image generation tool that creates images in the distinctive visual styles of famous film directors. Using fine-tuned LoRA adapters on the FLUX.1-Krea-dev model, I captured the unique cinematographic essence of five legendary directors:
+                I built **Director-Diffusion** as an AI image generation tool that creates images in the distinctive visual styles of famous film directors. Using fine-tuned LoRA adapters on the FLUX.1-Krea-dev model, I aimed to capture the unique cinematographic essence of five legendary directors:
                 
                 ### 🎭 Available Directors
                 
-                - **🎨 Wes Anderson**: Symmetrical compositions, pastel color palettes, whimsical and precise framing
-                - **🌃 David Fincher**: Dark, moody atmosphere, sharp contrasts, and meticulous detail
-                - **🌀 Christopher Nolan**: Epic scale, complex lighting, and dramatic architectural elements
+                - **🎨 Wes Anderson**: Symmetrical compositions, pastel colors, whimsical and precise framing, large character groups
+                - **🌃 David Fincher**: Dark, moody atmosphere, noir like vignettes, sharp contrasts, and meticulous detail
+                - **🌀 Christopher Nolan**: Epic scale, complex lighting, scientific realism, and dramatic architectural elements
                 - **🎪 Martin Scorsese**: Dynamic camera angles, gritty realism, and vibrant urban scenes  
-                - **🏜️ Denis Villeneuve**: Vast landscapes, mysterious atmospheres, and epic sci-fi aesthetics
+                - **🏜️ Denis Villeneuve**: Vast landscapes, mysterious atmospheres, gritty realism, and epic sci-fi aesthetics
                 
                 ### 🚀 How It Works
                 

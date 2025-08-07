@@ -72,14 +72,6 @@ def analyze_directors():
     print("Add these to your MultiDirectorConfig.directors list:")
     print()
 
-    for director in sorted(director_counts.keys()):
-        if director in sample_images:
-            # Extract trigger phrase from sample caption
-            caption = sample_images[director]["caption"]
-            trigger = ""
-            if f"<{director}-style>" in caption:
-                trigger = f"<{director}-style>"
-
     print("\n✅ Analysis complete!")
     return director_counts
 
