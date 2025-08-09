@@ -2,7 +2,7 @@
 
 <p align="center">
   <a href="https://gradio.app/" target="_blank">
-    <img src="https://raw.githubusercontent.com/gradio-app/gradio/main/assets/logo.svg" alt="Gradio Logo" width="120" />
+    <img src="https://raw.githubusercontent.com/gradio-app/gradio/main/assets/logo.svg" alt="Gradio Logo" width="120">
   </a>
   <br>
   <a href="https://nano-diffusion--flux-lora-gradio-gradio-app.modal.run/" target="_blank">
@@ -10,9 +10,15 @@
   </a>
 </p>
 
-
 Director-Diffusion is an open-source package to train Low Rank Adaptation Matrices of the Flux1.Krea-dev model to fit the style of famous directors. The directors chosen in this package are Christopher Nolan, Martin Scorsese, Wes Anderson, Denis Villeneuve, and David Fincher. They are so chosen for their unique styles and my personal affinity for their work.
 
+Each LoRA each took ~11 H200 hours to train, and is optimized in a number of ways, including but not limited to: VAE caching, image interpolation, optimized attention via xformers, torch.compile(), Cosine LR annealing. Captioning took around 45 H200 minutes (done in parallel). Models and model cards are given below:
+
+-  Nolan: [![Nolan](https://img.shields.io/badge/Hugging%20Face-Model%20Card-black?logo=huggingface)](https://huggingface.co/username/model-name)
+-  Villeneuve: [![Villeneuve](https://img.shields.io/badge/Hugging%20Face-Model%20Card-black?logo=huggingface)](https://huggingface.co/ksampath/flux-krea-villeneuve-lora)
+-  Anderson: [![Anderson](https://img.shields.io/badge/Hugging%20Face-Model%20Card-black?logo=huggingface)](https://huggingface.co/ksampath/flux-krea-anderson-lora)
+-  Fincher: [![Fincher](https://img.shields.io/badge/Hugging%20Face-Model%20Card-black?logo=huggingface)](https://huggingface.co/ksampath/flux-krea-fincher-lora)
+-  Scorsese: [![Scorsese](https://img.shields.io/badge/Hugging%20Face-Model%20Card-black?logo=huggingface)](https://huggingface.co/ksampath/flux-krea-scorsese-lora)
 
 
 ## Roadmap
@@ -62,7 +68,7 @@ Images were collected from shotdeck.com. Director counts for each image are list
 ## Acknowledgments
 I'd like to thank Alec Powell and the team at Modal for their support of this work through GPU credits. Also, thank you to the team at Astral for their great open-source work!
 
-## Relevant Papers and Blog posts
+## Further Reading
 
 - https://www.krea.ai/blog/flux-krea-open-source-release
 - https://modal.com/blog/flux-3x-faster

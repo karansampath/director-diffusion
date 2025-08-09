@@ -190,6 +190,35 @@ class FluxServeModel:
                     
         logger.info(f"Found {len(self.available_loras)} LoRA adapters")
     
+    def _create_shared_component_pipeline(self, base_pipeline: FluxPipeline) -> FluxPipeline:
+        """Create a pipeline that shares components with the base pipeline.
+        
+        This optimization reduces memory usage by sharing the underlying model weights
+        between the base and LoRA pipelines, while maintaining separate pipeline
+        instances for independent LoRA operations.
+        """
+        logger.info("Creating pipeline with shared components to optimize memory usage")
+        
+        # Create a new pipeline instance that shares the same model components
+        # This avoids loading model weights twice while allowing independent LoRA operations
+        shared_pipeline = FluxPipeline(
+            transformer=base_pipeline.transformer,
+            vae=base_pipeline.vae, 
+            text_encoder=base_pipeline.text_encoder,
+            text_encoder_2=base_pipeline.text_encoder_2,
+            tokenizer=base_pipeline.tokenizer,
+            tokenizer_2=base_pipeline.tokenizer_2,
+            scheduler=base_pipeline.scheduler,
+        )
+        shared_pipeline.to(base_pipeline.device, dtype=base_pipeline.dtype)
+        
+        # Verify the shared components are identical (same memory references)
+        assert shared_pipeline.transformer is base_pipeline.transformer, "Transformer should be shared"
+        assert shared_pipeline.vae is base_pipeline.vae, "VAE should be shared"
+        logger.info("Successfully created pipeline with shared components")
+        
+        return shared_pipeline
+
     @modal.enter(snap=True)
     def load_model(self):
         """Load base model (snapshotted)."""
@@ -217,13 +246,9 @@ class FluxServeModel:
         """Setup and optimize model (not snapshotted)."""
         self.base_pipeline.to("cuda")
         
-        # Create separate pipeline for LoRA inference (uncompiled for faster switching)
-        logger.info("Creating LoRA pipeline (uncompiled)...")
-        self.lora_pipeline = FluxPipeline.from_pretrained(
-            MODEL_DIR,
-            torch_dtype=torch.bfloat16,
-            use_safetensors=True,
-        ).to("cuda")
+        # Create LoRA pipeline sharing components with base pipeline (uncompiled for faster switching)
+        logger.info("Creating LoRA pipeline with shared components...")
+        self.lora_pipeline = self._create_shared_component_pipeline(self.base_pipeline)
         
         self._load_mega_cache()
         

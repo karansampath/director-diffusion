@@ -21,6 +21,10 @@ CUSTOM_GRADIO_THEME = """
         --neutral-900: #2c3e50;
         --neutral-800: #34495e;
         --neutral-700: #5a6c7d;
+        /* ▶︎ Pastel-blue scale */
+        --pastel-blue-50:  #f0f8ff;
+        --pastel-blue-100: #e8f4fd;
+        --pastel-blue-200: #dfefff;
     }
     
     /* GLOBAL BACKGROUND - Light pastel for entire app */
@@ -114,7 +118,7 @@ CUSTOM_GRADIO_THEME = """
     
     /* PANELS AND CONTAINERS - Clean white backgrounds */
     .gr-panel, .gr-block, .gr-form, .gr-box {
-        background: rgba(255, 255, 255, 0.9) !important;
+        background: rgba(232, 244, 253, 0.9) !important;
         border: 2px solid rgba(168, 216, 234, 0.25) !important;
         border-radius: 16px !important;
         box-shadow: 0 8px 32px rgba(0, 0, 0, 0.06) !important;
@@ -167,26 +171,26 @@ CUSTOM_GRADIO_THEME = """
     /* DROPDOWN SPECIFICS - Light mint pastel */
     .gr-dropdown .wrap, 
     div[data-testid="dropdown"] {
-        background: linear-gradient(135deg, #f0fdfa 0%, #ecfdf5 100%) !important;
-        background-color: #f0fdfa !important;
-        border: 2px solid rgba(167, 243, 208, 0.5) !important;
+        background: linear-gradient(135deg, var(--pastel-blue-100) 0%, var(--pastel-blue-50) 100%) !important;
+        background-color: var(--pastel-blue-100) !important;
+        border: 2px solid rgba(168, 216, 234, 0.6) !important;
         border-radius: 10px !important;
-        box-shadow: 0 2px 8px rgba(167, 243, 208, 0.15) !important;
+        box-shadow: 0 2px 8px rgba(168, 216, 234, 0.15) !important;
     }
     
     .gr-dropdown .wrap:hover {
-        background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%) !important;
-        border-color: rgba(134, 239, 172, 0.6) !important;
-        box-shadow: 0 4px 12px rgba(167, 243, 208, 0.25) !important;
+        background: linear-gradient(135deg, var(--pastel-blue-50) 0%, var(--pastel-blue-200) 100%) !important;
+        border-color: rgba(168, 216, 234, 0.7) !important;
+        box-shadow: 0 4px 12px rgba(168, 216, 234, 0.25) !important;
     }
     
     .gr-dropdown option {
-        background: #ffffff !important;
+        background: var(--pastel-blue-50) !important;
         color: #222 !important;
         font-weight: 400 !important;
     }
     .gr-dropdown option:hover, .gr-dropdown option:selected {
-        background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%) !important;
+        background: linear-gradient(135deg, var(--pastel-blue-100) 0%, var(--pastel-blue-50) 100%) !important;
         color: #1a1a1a !important;
         font-weight: 600 !important;
     }
@@ -211,18 +215,46 @@ CUSTOM_GRADIO_THEME = """
         padding: 12px 20px !important;
     }
     
-    .gr-tab-nav .gr-tab.selected {
-        background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%) !important;
-        color: #1a1a1a !important;
-        font-weight: 600 !important;
-        box-shadow: 0 4px 12px rgba(253, 230, 138, 0.3) !important;
+    /* TAB STATES - COMPREHENSIVE OVERRIDE */
+    .tab-nav, .gr-tab-nav, .gradio-tab-nav {
+        background: rgba(255, 255, 255, 0.8) !important;
+        border-radius: 14px !important;
+        padding: 6px !important;
+        margin-bottom: 24px !important;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.05) !important;
     }
     
-    .gr-tab-nav .gr-tab:hover:not(.selected) {
-        background: linear-gradient(135deg, #fffbe8 0%, #fef9c3 100%) !important;
+    .tab, .gr-tab, .gradio-tab,
+    .tab-nav .tab, .gr-tab-nav .gr-tab, .gradio-tab-nav .gradio-tab {
+        background: transparent !important;
+        background-color: transparent !important;
+        color: #2c3e50 !important;
+        font-family: 'EB Garamond', serif !important;
+        font-weight: 500 !important;
+        font-size: 1.1rem !important;
+        border-radius: 10px !important;
+        transition: all 0.3s ease !important;
+        padding: 12px 20px !important;
+        border: none !important;
+    }
+    
+    .tab:hover, .gr-tab:hover, .gradio-tab:hover,
+    .tab-nav .tab:hover, .gr-tab-nav .gr-tab:hover, .gradio-tab-nav .gradio-tab:hover {
+        background: linear-gradient(135deg, var(--pastel-blue-100) 0%, var(--pastel-blue-50) 100%) !important;
+        background-color: var(--pastel-blue-100) !important;
         color: #1a1a1a !important;
         transform: translateY(-1px) !important;
-        box-shadow: 0 2px 8px rgba(254, 249, 195, 0.2) !important;
+        box-shadow: 0 2px 8px rgba(168, 216, 234, 0.4) !important;
+    }
+    
+    .tab.selected, .gr-tab.selected, .gradio-tab.selected,
+    .tab-nav .tab.selected, .gr-tab-nav .gr-tab.selected, .gradio-tab-nav .gradio-tab.selected,
+    .tab.active, .gr-tab.active, .gradio-tab.active {
+        background: linear-gradient(135deg, var(--pastel-blue-200) 0%, var(--pastel-blue-100) 100%) !important;
+        background-color: var(--pastel-blue-200) !important;
+        color: #1a1a1a !important;
+        font-weight: 600 !important;
+        box-shadow: 0 4px 12px rgba(168, 216, 234, 0.3) !important;
     }
     
     /* SPECIAL CONTENT BOXES */
@@ -543,8 +575,8 @@ CUSTOM_GRADIO_THEME = """
     }
     
     .gr-image, .image-container, .image-wrapper {
-        background: rgba(255, 255, 255, 0.9) !important;
-        border: 2px solid rgba(251, 207, 232, 0.3) !important;
+        background: rgba(232, 244, 253, 0.9) !important;
+        border: 2px solid rgba(168, 216, 234, 0.3) !important;
         border-radius: 14px !important;
     }
     
@@ -573,21 +605,21 @@ CUSTOM_GRADIO_THEME = """
     
     .tab:hover, .gr-tab:hover, .gradio-tab:hover,
     .tab-nav .tab:hover, .gr-tab-nav .gr-tab:hover, .gradio-tab-nav .gradio-tab:hover {
-        background: linear-gradient(135deg, #fef7ed 0%, #fed7aa 100%) !important;
-        background-color: #fef7ed !important;
+        background: linear-gradient(135deg, var(--pastel-blue-100) 0%, var(--pastel-blue-50) 100%) !important;
+        background-color: var(--pastel-blue-100) !important;
         color: #1a1a1a !important;
         transform: translateY(-1px) !important;
-        box-shadow: 0 2px 8px rgba(254, 215, 170, 0.4) !important;
+        box-shadow: 0 2px 8px rgba(168, 216, 234, 0.4) !important;
     }
     
     .tab.selected, .gr-tab.selected, .gradio-tab.selected,
     .tab-nav .tab.selected, .gr-tab-nav .gr-tab.selected, .gradio-tab-nav .gradio-tab.selected,
     .tab.active, .gr-tab.active, .gradio-tab.active {
-        background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%) !important;
-        background-color: #fef3c7 !important;
+        background: linear-gradient(135deg, var(--pastel-blue-200) 0%, var(--pastel-blue-100) 100%) !important;
+        background-color: var(--pastel-blue-200) !important;
         color: #1a1a1a !important;
         font-weight: 600 !important;
-        box-shadow: 0 4px 12px rgba(253, 230, 138, 0.3) !important;
+        box-shadow: 0 4px 12px rgba(168, 216, 234, 0.3) !important;
     }
     
     /* ADDITIONAL ELEMENT OVERRIDES */
