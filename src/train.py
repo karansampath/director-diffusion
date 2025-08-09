@@ -564,6 +564,12 @@ class FluxTrainer:
                         if global_step >= director_config.max_train_steps:
                             return
 
+    def _apply_vae_scaling(self, model_input):
+        """Apply VAE scaling factors to model input."""
+        vae_config_shift_factor = self.vae.config.shift_factor
+        vae_config_scaling_factor = self.vae.config.scaling_factor
+        return (model_input - vae_config_shift_factor) * vae_config_scaling_factor
+
     def compute_loss(self, batch):
 
         device = self.accelerator.device
@@ -588,21 +594,13 @@ class FluxTrainer:
             # Use pre-cached latents
             model_input = batch["latents"].to(device, dtype=weight_dtype)
             # Apply VAE scaling
-            vae_config_shift_factor = self.vae.config.shift_factor
-            vae_config_scaling_factor = self.vae.config.scaling_factor
-            model_input = (
-                model_input - vae_config_shift_factor
-            ) * vae_config_scaling_factor
+            model_input = self._apply_vae_scaling(model_input)
         else:
             # Encode images on-the-fly
             pixel_values = batch["pixel_values"].to(device, dtype=self.vae.dtype)
             model_input = self.vae.encode(pixel_values).latent_dist.sample()
             # Apply VAE scaling
-            vae_config_shift_factor = self.vae.config.shift_factor
-            vae_config_scaling_factor = self.vae.config.scaling_factor
-            model_input = (
-                model_input - vae_config_shift_factor
-            ) * vae_config_scaling_factor
+            model_input = self._apply_vae_scaling(model_input)
             model_input = model_input.to(dtype=weight_dtype)
 
         # Handle unexpected tensor dimensions - squeeze if needed
