@@ -401,6 +401,7 @@ def gradio_app():
     
     import gradio as gr
     from fastapi import FastAPI
+    from fastapi.responses import FileResponse
     from gradio.routes import mount_gradio_app
     
     
@@ -565,7 +566,7 @@ def gradio_app():
         return display
     
     # Load configuration
-    title = "🎬 Director-Diffusion: Cinematic Style Generator"
+    title = "Director-Diffusion: Cinematic Style Generator"
     
     # Better examples showcasing different directors' styles
     example_prompts = [
@@ -611,7 +612,15 @@ def gradio_app():
             )
         
         return base_inputs + [seed_input]
-    
+
+    web_app = FastAPI()
+    @web_app.get("/assets/favicon.ico", include_in_schema=False)
+    async def favicon():
+        return FileResponse("/assets/favicon.svg")
+
+    @web_app.get("/assets/background.svg", include_in_schema=False)
+    async def background():
+        return FileResponse("/assets/background.svg")
     # Create main interface with favicon support
     with gr.Blocks(css=CUSTOM_GRADIO_THEME, title=title, head='<link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMzIiIGhlaWdodD0iMzIiIHZpZXdCb3g9IjAgMCAzMiAzMiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iNCIgZmlsbD0iIzFhMWEyZSIvPgo8Y2lyY2xlIGN4PSIxNiIgY3k9IjE2IiByPSI2IiBzdHJva2U9IiNkNGFmMzciIHN0cm9rZS13aWR0aD0iMiIgZmlsbD0ibm9uZSIvPgo8Y2lyY2xlIGN4PSIxNiIgY3k9IjE2IiByPSIyIiBmaWxsPSIjZDRhZjM3Ii8+CjwvHN2Zz4K">') as demo:
         
@@ -869,4 +878,4 @@ def gradio_app():
                 )
     
     demo.queue(max_size=20)
-    return mount_gradio_app(app=FastAPI(), blocks=demo, path="/")
+    return mount_gradio_app(app=web_app, blocks=demo, path="/")
