@@ -31,7 +31,7 @@ The following comparisons showcase the dramatic difference between the base Flux
 |------------|------------|
 | ![Base Model - Nolan](assets/comparisons/nolan_base.webp) | ![Nolan LoRA](assets/comparisons/nolan_lora.webp) |
 
-### Denis Villeneuve  
+### Denis Villeneuve
 *Prompt: "A vast desert landscape with mysterious structures"*
 
 | Base Model | Villeneuve LoRA |
@@ -62,12 +62,13 @@ The following comparisons showcase the dramatic difference between the base Flux
 
 ## Roadmap
 
-- [x] Image Collection
-- [x] Caption data and verify performance
-- [x] Train base LoRAs
+- [x] Image Collection and Data Verification
+- [x] Caption data and verify performance of script
+- [x] Train LoRAs on single director
+- [x] Train Multi Director LoRA
 - [x] Serve model off Gradio App
 - [ ] Evaluate using Frechet Inception Distance (FID) and CLIP Score
-- [ ] Create LCM distillation
+- [ ] Create LCM distillation of each LoRA
 
 
 ## Getting Started
@@ -78,10 +79,10 @@ To run the code, sync the uv environment (`uv sync`) and run the following comma
 - train: `uv run modal run -m src.train`. You will likely need to add the `detach` flag as well to ensure that the train run does not get limited by session length.
 - serve: `uv run modal serve -m src.serve` (for local dev).
 - deploy: `uv run modal deploy -m src.serve`
-  
+
 ## Uses
 
-- Flux 1 - Krea dev (black-forest-labs/FLUX.1-Krea-dev) as the base model for training (chosen over Flux1.dev for its realism, I like this [article]() for further reading)
+- Flux 1 - Krea dev (black-forest-labs/FLUX.1-Krea-dev) as the base model for training (chosen over Flux1.dev for its realism, I like this [article](https://www.dbreunig.com/2025/08/04/the-rise-of-opinionated-models.html) for further reading)
 - uv for package management
 - ruff for code quality
 - ty for type checking

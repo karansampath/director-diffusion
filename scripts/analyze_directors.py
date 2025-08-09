@@ -26,7 +26,7 @@ def analyze_directors():
     from collections import Counter
 
     # Load main caption dataset
-    with open("/volume/labels/main_caption_dataset.json", "r") as f:
+    with open("/volume/labels/main_caption_dataset.json") as f:
         all_captions = json.load(f)
 
     # Extract director names from file paths

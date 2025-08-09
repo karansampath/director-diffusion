@@ -1,28 +1,33 @@
 #!/usr/bin/env python
 
-from dataclasses import dataclass, field, asdict
-from pathlib import Path
+import copy
 import json
+import logging
 from contextlib import nullcontext
-from tqdm import tqdm
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
 
 import modal
 import torch
-from torch.utils.data import DataLoader, Dataset
-from torchvision import transforms
-from PIL import Image
 from accelerate import Accelerator
-from diffusers import FluxPipeline
-from peft import LoraConfig, get_peft_model_state_dict
-import logging
+from diffusers import FlowMatchEulerDiscreteScheduler, FluxPipeline
 from diffusers.training_utils import (
     compute_density_for_timestep_sampling,
 )
-from diffusers import FlowMatchEulerDiscreteScheduler
-from transformers import CLIPTokenizer, T5TokenizerFast  
-import copy
+from peft import LoraConfig, get_peft_model_state_dict
+from PIL import Image
+from torch.utils.data import DataLoader, Dataset
+from torchvision import transforms
+from tqdm import tqdm
+from transformers import CLIPTokenizer, T5TokenizerFast
 
-from src.config import MODEL_DIR, DIRECTORS_DIR, volume, huggingface_secret, wandb_secret
+from src.config import (
+    DIRECTORS_DIR,
+    MODEL_DIR,
+    huggingface_secret,
+    volume,
+    wandb_secret,
+)
 
 image = (
     modal.Image.from_registry(
@@ -73,7 +78,6 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class DirectorConfig:
-
     name: str
     style_description: str
     data_path: str
@@ -90,9 +94,9 @@ class DirectorConfig:
     lora_bias: str = "none"
     init_lora_weights: str = "pissa"  # Better initialization for style learning
 
+
 @dataclass
 class MultiDirectorConfig:
-
     directors: list[DirectorConfig] = field(
         default_factory=lambda: [
             DirectorConfig(
@@ -153,7 +157,6 @@ class MultiDirectorConfig:
     save_every_n_steps: int = 250
 
 
-
 class DirectorDataset(Dataset):
     """Dataset that loads from caption dataset and filters by director."""
 
@@ -189,7 +192,7 @@ class DirectorDataset(Dataset):
         logger.info(f"Loading data for director: {self.director_name}")
 
         # Load main caption dataset
-        with open(self.caption_path, "r") as f:
+        with open(self.caption_path) as f:
             all_captions = json.load(f)
 
         # Filter for this director's images
@@ -323,8 +326,6 @@ class FluxTrainer:
         # Enable optimized attention
         if self.config.enable_xformers:
             try:
-                import xformers
-
                 torch.backends.cuda.enable_flash_sdp(True)
             except ImportError:
                 logger.warning("xformers not available, using default attention")
@@ -439,7 +440,6 @@ class FluxTrainer:
 
     @modal.method()
     def train_director(self, director_config: DirectorConfig) -> str:
-
         logger.info(f"Starting training for director: {director_config.name}")
 
         # Create director-specific LoRA adapter
@@ -468,7 +468,9 @@ class FluxTrainer:
         dataloader, optimizer = self.accelerator.prepare(dataloader, optimizer)
 
         # Training loop with optimizations
-        self.training_loop(director_config, dataloader, optimizer, scheduler, adapter_name)
+        self.training_loop(
+            director_config, dataloader, optimizer, scheduler, adapter_name
+        )
 
         # Save director's LoRA weights
         output_path = f"{DIRECTORS_DIR}/{director_config.name}"
@@ -505,15 +507,19 @@ class FluxTrainer:
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer,
             T_max=director_config.max_train_steps,
-            eta_min=director_config.learning_rate * 0.1
+            eta_min=director_config.learning_rate * 0.1,
         )
 
         return optimizer, scheduler
 
     def training_loop(
-        self, director_config: DirectorConfig, dataloader, optimizer, scheduler, adapter_name: str
+        self,
+        director_config: DirectorConfig,
+        dataloader,
+        optimizer,
+        scheduler,
+        adapter_name: str,
     ):
-
         global_step = 0
 
         # Enable autocast for mixed precision
@@ -528,7 +534,10 @@ class FluxTrainer:
             else nullcontext()
         )
 
-        with tqdm(total=director_config.max_train_steps, desc=f"Training {director_config.name}"):
+        with tqdm(
+            total=director_config.max_train_steps,
+            desc=f"Training {director_config.name}",
+        ):
             while global_step < director_config.max_train_steps:
                 for batch in tqdm(dataloader):
                     with self.accelerator.accumulate(self.transformer):
@@ -546,7 +555,7 @@ class FluxTrainer:
                             )
 
                         optimizer.step()
-                        scheduler.step() # Step scheduler after optimizer step
+                        scheduler.step()  # Step scheduler after optimizer step
                         optimizer.zero_grad(set_to_none=True)  # More memory efficient
 
                     if self.accelerator.sync_gradients:
@@ -573,7 +582,6 @@ class FluxTrainer:
                             return
 
     def compute_loss(self, batch):
-
         device = self.accelerator.device
         weight_dtype = (
             torch.bfloat16 if self.config.mixed_precision == "bf16" else torch.float16
@@ -599,7 +607,9 @@ class FluxTrainer:
         else:
             # Encode images on-the-fly
             pixel_values = batch["pixel_values"].to(device, dtype=self.vae.dtype)
-            model_input = self._apply_vae_scaling(self.vae.encode(pixel_values).latent_dist.sample())
+            model_input = self._apply_vae_scaling(
+                self.vae.encode(pixel_values).latent_dist.sample()
+            )
             model_input = model_input.to(dtype=weight_dtype)
 
         # Handle unexpected tensor dimensions - squeeze if needed
@@ -674,10 +684,14 @@ class FluxTrainer:
             model_pred.float(), target.float(), reduction="mean"
         )
 
-        if hasattr(self, 'enable_perceptual_loss') and self.enable_perceptual_loss:
-            style_consistency_loss = torch.nn.functional.mse_loss(
-                model_pred.float(), target.float(), reduction="none"
-            ).mean(dim=[2, 3]).std()  # Encourage consistency across spatial dimensions
+        if hasattr(self, "enable_perceptual_loss") and self.enable_perceptual_loss:
+            style_consistency_loss = (
+                torch.nn.functional.mse_loss(
+                    model_pred.float(), target.float(), reduction="none"
+                )
+                .mean(dim=[2, 3])
+                .std()
+            )  # Encourage consistency across spatial dimensions
 
             loss = base_loss + 0.1 * style_consistency_loss
         else:
@@ -742,9 +756,7 @@ class FluxTrainer:
 
         return latent_image_ids
 
-    def validate_director(
-        self, director_config: DirectorConfig, adapter_name: str
-    ):
+    def validate_director(self, director_config: DirectorConfig, adapter_name: str):
         """Run validation for a director's training."""
 
         # Switch to evaluation mode
@@ -1027,7 +1039,7 @@ def train_multi_director(config_dict: dict):
 
     config = MultiDirectorConfig(**config_dict)
     trainer = FluxTrainer(config)
-    
+
     for result in tqdm(
         trainer.train_director.map(config.directors),
         total=len(config.directors),
@@ -1046,10 +1058,11 @@ def train_multi_director(config_dict: dict):
 )
 def download_flux_model():
     """Download FLUX.1-dev model to volume storage."""
+    from pathlib import Path
+
     import torch
     from diffusers import FluxPipeline
     from huggingface_hub import snapshot_download
-    from pathlib import Path
 
     model_name = MultiDirectorConfig.base_model
 

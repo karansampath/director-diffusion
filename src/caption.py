@@ -1,13 +1,13 @@
-import os
 import json
-from glob import glob
-from PIL import Image
-from tqdm import tqdm
 import logging
+import os
+from glob import glob
 
-import torch
-from torch.utils.data import Dataset
 import modal
+import torch
+from PIL import Image
+from torch.utils.data import Dataset
+from tqdm import tqdm
 
 from src.utils import STYLE_MAP
 
@@ -76,8 +76,8 @@ class Model:
     def load_model(self):
         volume.reload()
 
-        from transformers import pipeline
         from huggingface_hub import snapshot_download
+        from transformers import pipeline
 
         snapshot_download(
             "Qwen/Qwen2.5-VL-3B-Instruct",
@@ -132,9 +132,8 @@ class Model:
                 raw_captions = self.pipe(messages, batch_size=1)
             results = []
             final_caption = create_reinforced_caption(
-                            data['style_token'],
-                            extract_assistant_content(raw_captions)
-                        )
+                data["style_token"], extract_assistant_content(raw_captions)
+            )
             results.append({"file_name": data["image_path"], "text": final_caption})
             return results
 
@@ -155,12 +154,12 @@ def extract_assistant_content(raw_caption):
 
 def create_reinforced_caption(style_token, raw_caption):
     """Create caption that reinforces trigger phrase without dilution."""
-    
+
     # Truncate if too long
     if len(raw_caption.split()) > 75:
         words = raw_caption.split()[:75]
         raw_caption = " ".join(words)
-    
+
     # Strategic placement: beginning, middle hint, and end
     return f"{style_token} {raw_caption}, in {style_token} style"
 
