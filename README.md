@@ -10,7 +10,7 @@
   </a>
 </p>
 
-Director-Diffusion is an open-source package to train Low Rank Adaptation Matrices of the Flux1.Krea-dev model to fit the style of famous directors. The directors chosen here are Christopher Nolan, Martin Scorsese, Wes Anderson, Denis Villeneuve, and David Fincher, but the code is broadly applicable. They are so chosen for their unique styles and my personal affinity for their work.
+Director-Diffusion is an open-source package to train Low Rank Adaptations (LoRAs) of the Flux1.Krea-dev model to fit the style of famous directors. The directors chosen here are Christopher Nolan, Martin Scorsese, Wes Anderson, Denis Villeneuve, and David Fincher, but the code is broadly applicable. They are so chosen for their unique styles and my personal affinity for their work.
 
 Each LoRA each took ~11 H200 hours to train, and is optimized in a number of ways, including but not limited to: VAE caching, image interpolation, optimized attention via xformers, torch.compile(), Cosine LR annealing. Captioning took around 45 H200 minutes (done in parallel). Models and model cards are given below:
 
