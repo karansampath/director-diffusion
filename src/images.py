@@ -21,6 +21,7 @@ _CORE_ML_PACKAGES = [
     "huggingface-hub[hf_transfer]",
     "pillow",
     "numpy",
+    "sentencepiece",
 ]
 
 
@@ -47,7 +48,6 @@ def training_image():
         "triton",
         "ftfy",
         "rich",
-        "sentencepiece",
     )
 
 
@@ -60,7 +60,6 @@ def serving_image(cache_dir: Path):
             "pydantic==2.10.6",
             "para-attn==0.3.32",
             "safetensors==0.5.3",
-            "sentencepiece",
         )
         .env(
             {

@@ -3,7 +3,6 @@ import json
 import logging
 from dataclasses import asdict
 from pathlib import Path
-from typing import Optional
 
 import modal
 import numpy as np
@@ -39,7 +38,7 @@ app = modal.App(
 )
 
 
-@app.cls(gpu="A100", timeout=3600)  # 1 hour timeout for full evaluation
+@app.cls(gpu="H100", timeout=3600)  # 1 hour timeout for full evaluation
 class DirectorEvaluator:
     """Comprehensive evaluator for LoRA vs base model comparison."""
 
@@ -49,39 +48,54 @@ class DirectorEvaluator:
         self.clip_model = None
         self.clip_preprocess = None
         self.clip_tokenizer = None
-        self.device = "cuda"
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        if not torch.cuda.is_available():
+            logger.warning("CUDA not available, falling back to CPU")
 
     @modal.enter()
     def setup(self):
         """Initialize models and evaluation tools."""
         logger.info("Setting up evaluation environment...")
 
-        # Load base Flux model
-        logger.info("Loading base Flux pipeline...")
-        self.base_pipeline = FluxPipeline.from_pretrained(
-            MODEL_DIR,
-            torch_dtype=torch.bfloat16,
-            use_safetensors=True,
-        ).to(self.device)
+        try:
+            # Load base Flux model
+            logger.info(f"Loading base Flux pipeline from {MODEL_DIR}...")
+            self.base_pipeline = FluxPipeline.from_pretrained(
+                MODEL_DIR,
+                torch_dtype=torch.bfloat16,
+                use_safetensors=True,
+            ).to(self.device)
+            logger.info("Base Flux pipeline loaded successfully")
 
-        # Load CLIP model for similarity evaluation
-        logger.info("Loading CLIP model...")
-        model_name = "ViT-B-32" if self.config.use_smaller_clip_model else "ViT-L-14"
-        (
-            self.clip_model,
-            _,
-            self.clip_preprocess,
-        ) = open_clip.create_model_and_transforms(
-            model_name, pretrained="openai", device=self.device
-        )
-        self.clip_tokenizer = open_clip.get_tokenizer(model_name)
+            # Load CLIP model for similarity evaluation
+            logger.info("Loading CLIP model...")
+            model_name = (
+                "ViT-B-32" if self.config.use_smaller_clip_model else "ViT-L-14"
+            )
+            (
+                self.clip_model,
+                _,
+                self.clip_preprocess,
+            ) = open_clip.create_model_and_transforms(
+                model_name, pretrained="openai", device=self.device
+            )
+            self.clip_tokenizer = open_clip.get_tokenizer(model_name)
+            logger.info("CLIP model loaded successfully")
 
-        logger.info("Evaluation environment ready!")
+            logger.info("Evaluation environment ready!")
+
+        except Exception as e:
+            logger.error(f"Failed to setup evaluation environment: {e}")
+            raise
 
     def generate_comparison_batch(
         self, prompt: str, director: str, seeds: list[int]
     ) -> tuple[list[Image.Image], list[Image.Image]]:
         """Generate base and LoRA images for comparison."""
+
+        if self.base_pipeline is None:
+            raise RuntimeError("Base pipeline not initialized. Call setup() first.")
 
         base_images = []
         lora_images = []
@@ -89,7 +103,7 @@ class DirectorEvaluator:
         # Generate base model images
         logger.info(f"Generating base images for: {prompt}")
         for seed in seeds:
-            generator = torch.Generator(device=self.device).manual_seed(seed)
+            generator = torch.Generator().manual_seed(seed)
 
             base_image = self.base_pipeline(
                 prompt=prompt,
@@ -113,7 +127,7 @@ class DirectorEvaluator:
             lora_prompt = f"{prompt} <{director}-style>"
 
             for seed in seeds:
-                generator = torch.Generator(device=self.device).manual_seed(seed)
+                generator = torch.Generator().manual_seed(seed)
 
                 lora_image = self.base_pipeline(
                     prompt=lora_prompt,
@@ -245,8 +259,8 @@ class DirectorEvaluator:
 
         return self.compute_clip_similarity(images, director_texts)
 
+    @modal.method()
     def evaluate_director_comparison(self, director: str) -> dict:
-        """Run complete evaluation for a single director."""
         logger.info(f"Evaluating director: {director} ({DIRECTOR_MAP[director]})")
 
         results = {
@@ -358,6 +372,7 @@ class DirectorEvaluator:
 
         return results
 
+    @modal.method()
     def run_full_evaluation(self) -> dict:
         """Run evaluation for all directors."""
         logger.info("Starting full director evaluation...")
@@ -374,7 +389,7 @@ class DirectorEvaluator:
         for director in DIRECTOR_MAP.keys():
             lora_path = Path(f"{DIRECTORS_DIR}/{director}")
             if lora_path.exists():
-                director_result = self.evaluate_director_comparison(director)
+                director_result = self.evaluate_director_comparison.remote(director)
                 evaluation_results["directors"][director] = director_result
                 director_results.append(director_result)
             else:
@@ -414,7 +429,7 @@ class DirectorEvaluator:
 
 
 @app.function(timeout=3600)
-def run_evaluation(config_dict: Optional[dict] = None) -> dict:
+def run_evaluation(config_dict: dict | None = None) -> dict:
     """Run the complete evaluation pipeline."""
 
     # Use default config if none provided
@@ -425,7 +440,7 @@ def run_evaluation(config_dict: Optional[dict] = None) -> dict:
 
     # Use Modal class method to ensure proper setup
     evaluator = DirectorEvaluator(config)
-    results = evaluator.run_full_evaluation()
+    results = evaluator.run_full_evaluation.remote()
 
     # Save results to volume
     results_path = "/volume/evaluation_results.json"
@@ -450,13 +465,13 @@ def quick_evaluation(director: str, num_prompts: int = 3) -> dict:
 
     # Use Modal class method
     evaluator = DirectorEvaluator(config)
-    result = evaluator.evaluate_director_comparison(director)
+    result = evaluator.evaluate_director_comparison.remote(director)
 
     return result
 
 
 @app.local_entrypoint()
-def main(director: Optional[str] = None, quick: bool = False, num_prompts: int = 3):
+def main(director: str | None = None, quick: bool = False, num_prompts: int = 3):
     """Main entry point for evaluation."""
 
     if director and quick:
@@ -473,7 +488,7 @@ def main(director: Optional[str] = None, quick: bool = False, num_prompts: int =
         # Run full evaluation for single director
         config = EvaluationConfig()
         evaluator = DirectorEvaluator(config)
-        result = evaluator.evaluate_director_comparison(director)
+        result = evaluator.evaluate_director_comparison.remote(director)
         print(f"\n=== Full Evaluation Results for {director} ===")
         print(json.dumps(result, indent=2))
 
