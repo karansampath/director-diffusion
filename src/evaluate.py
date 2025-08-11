@@ -186,8 +186,6 @@ class DirectorEvaluator:
             # Convert to numpy array
             img_array = np.array(img)
 
-            # Simple metrics: contrast, sharpness indicators
-            # Higher contrast and edge density often correlates with aesthetic appeal
             gray = np.mean(img_array, axis=2)
             contrast = np.std(gray) / 255.0  # Normalize to [0,1]
 

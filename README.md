@@ -67,7 +67,8 @@ The following comparisons showcase the dramatic difference between the base Flux
 - [x] Train LoRAs on single director
 - [x] Train Multi Director LoRA
 - [x] Serve model off Gradio App
-- [ ] Complete evaluation using Frechet Inception Distance (FID) and CLIP Score
+- [x] Complete evaluation using metrics
+- [ ] Surface metrics from blind voting
 - [ ] Create LCM distillation of each LoRA
 
 
@@ -99,6 +100,17 @@ Images were collected from shotdeck.com. Director counts for each image are list
 - Nolan: 232 images
 - Scorsese: 215 images
 - Villeneuve: 197 images
+
+## Evaluation Results
+
+- **CLIP Similarity:** −0.3% average change
+  _Top performer: Villeneuve_
+
+- **Aesthetic Score:** +4.2% average improvement
+  _Top performer: Fincher_
+
+- **Style Score:** +0.7% average improvement
+  _Top performer: Villeneuve_
 
 ## Questions?
 If you see an error or bug, please open an issue on GitHub, or better yet, open a pull request! I welcome contributions. For feedback / ideas please email me at me@karansampath.com.
