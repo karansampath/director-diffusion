@@ -1,19 +1,18 @@
 #!/usr/bin/env python
+import sys
+from pathlib import Path
 
-"""
-Script to analyze the main caption dataset and show available directors.
-Run this first to see what directors you have data for.
+# Add the parent directory to the Python path
+sys.path.insert(0, str(Path(__file__).parent.parent))  # noqa: E402
 
-Usage:
-    modal run scripts/analyze_directors.py
-"""
+import modal  # noqa: E402
 
-import modal
+from src.images import simple_image  # noqa: E402
 
 app = modal.App(name="analyze-directors")
 
 # Minimal image for analysis
-image = modal.Image.debian_slim().uv_pip_install("json")
+image = simple_image("json")
 
 # Use your existing volume
 volume = modal.Volume.from_name("director-diffusion")

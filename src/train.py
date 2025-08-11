@@ -28,39 +28,9 @@ from src.config import (
     volume,
     wandb_secret,
 )
+from src.images import training_image
 
-image = (
-    modal.Image.from_registry(
-        "nvidia/cuda:12.8.1-devel-ubuntu22.04",
-        add_python="3.12",
-    )
-    .entrypoint([])
-    .uv_pip_install(
-        "accelerate",
-        "datasets",
-        "diffusers",
-        "sentencepiece",
-        "rich",
-        "ftfy",
-        "huggingface-hub[hf_transfer]",
-        "numpy",
-        "peft>=0.8.0",
-        "torch>=2.1.0",
-        "torchvision",
-        "triton",
-        "wandb",
-        "peft",
-        "smart_open",
-        "optimum",
-        "xformers",
-    )
-    .env(
-        {
-            "HF_HUB_ENABLE_HF_TRANSFER": "1",
-            "TORCH_CUDNN_V8_API_ENABLED": "1",
-        }
-    )
-)
+image = training_image()
 
 app = modal.App(
     name="multi-director-flux-train",

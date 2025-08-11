@@ -67,7 +67,7 @@ The following comparisons showcase the dramatic difference between the base Flux
 - [x] Train LoRAs on single director
 - [x] Train Multi Director LoRA
 - [x] Serve model off Gradio App
-- [ ] Evaluate using Frechet Inception Distance (FID) and CLIP Score
+- [ ] Complete evaluation using Frechet Inception Distance (FID) and CLIP Score
 - [ ] Create LCM distillation of each LoRA
 
 

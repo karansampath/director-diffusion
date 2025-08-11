@@ -9,26 +9,10 @@ from PIL import Image
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
+from src.images import caption_image
 from src.utils import STYLE_MAP
 
-image = (
-    modal.Image.debian_slim()
-    .uv_pip_install(
-        "torch",
-        "torchvision",
-        "accelerate",
-        "numpy",
-        "transformers",
-        "huggingface-hub[hf_transfer]",
-    )
-    .env(
-        {
-            "HF_HUB_ENABLE_HF_TRANSFER": "1",
-            "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
-        }
-    )
-    .add_local_dir("src", "/src", copy=True)
-)
+image = caption_image()
 volume = modal.Volume.from_name(
     "director-diffusion", create_if_missing=True
 )  # upload data to this volume

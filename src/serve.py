@@ -22,11 +22,13 @@ from src.config import (
     huggingface_secret,
     volume,
 )
+from src.images import serving_image
 from src.utils import CUSTOM_GRADIO_THEME
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
 
 # Common configuration
 CONTAINER_CACHE_DIR = Path("/cache")
@@ -35,41 +37,7 @@ CONTAINER_CACHE_VOLUME = modal.Volume.from_name(
 )
 ENABLE_COMPILATION = False
 # Optimized Modal image
-image = (
-    modal.Image.from_registry(
-        "nvidia/cuda:12.8.1-devel-ubuntu22.04",
-        add_python="3.12",
-    )
-    .entrypoint([])
-    .uv_pip_install(
-        "accelerate==1.6.0",
-        "diffusers==0.33.1",
-        "torch>=2.7.0",
-        "torchvision",
-        "peft>=0.8.0",
-        "transformers==4.51.3",
-        "sentencepiece==0.2.0",
-        "huggingface-hub[hf_transfer]==0.30.2",
-        "pillow",
-        "numpy==2.2.4",
-        "fastapi[standard]",
-        "gradio~=5.7.1",
-        "pydantic==2.10.6",
-        "para-attn==0.3.32",
-        "safetensors==0.5.3",
-    )
-    .env(
-        {
-            "HF_HUB_ENABLE_HF_TRANSFER": "1",
-            "TORCH_CUDNN_V8_API_ENABLED": "1",
-            "TORCHINDUCTOR_FX_GRAPH_CACHE": "1",
-            "CUDA_CACHE_PATH": str(CONTAINER_CACHE_DIR / ".nv_cache"),
-            "HF_HUB_CACHE": str(CONTAINER_CACHE_DIR / ".hf_hub_cache"),
-            "TORCHINDUCTOR_CACHE_DIR": str(CONTAINER_CACHE_DIR / ".inductor_cache"),
-            "TRITON_CACHE_DIR": str(CONTAINER_CACHE_DIR / ".triton_cache"),
-        }
-    )
-)
+image = serving_image(CONTAINER_CACHE_DIR)
 
 app = modal.App(
     name="flux-lora-gradio",
