@@ -131,13 +131,31 @@ def extract_assistant_content(raw_caption):
     Extracts the assistant's content from a conversation list.
     """
     try:
-        return raw_caption[0]["generated_text"][1]["content"]
-    except Exception:
+        if not raw_caption or not isinstance(raw_caption, list):
+            logging.warning("Invalid raw_caption format: not a list or empty")
+            return ""
+        if len(raw_caption) == 0:
+            logging.warning("Empty raw_caption list")
+            return ""
+        generated_text = raw_caption[0].get("generated_text")
+        if not generated_text or len(generated_text) < 2:
+            logging.warning("Invalid generated_text structure")
+            return ""
+        return generated_text[1].get("content", "")
+    except (KeyError, IndexError, TypeError) as e:
+        logging.warning(f"Failed to extract assistant content: {e}")
         return ""
 
 
 def create_reinforced_caption(style_token, raw_caption):
     """Create caption that reinforces trigger phrase without dilution."""
+    if not style_token or not isinstance(style_token, str):
+        logging.warning(f"Invalid style_token: {style_token}")
+        return raw_caption if raw_caption else ""
+
+    if not raw_caption or not isinstance(raw_caption, str):
+        logging.warning(f"Invalid raw_caption: {raw_caption}")
+        return f"{style_token}, in {style_token} style"
 
     # Truncate if too long
     if len(raw_caption.split()) > 75:

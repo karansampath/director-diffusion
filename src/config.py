@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 from dataclasses import dataclass
+from typing import Optional
 
 import modal
 
@@ -29,7 +30,7 @@ class EvaluationConfig:
     """Configuration for LoRA vs Base model evaluation."""
 
     # Test prompts for each director style
-    test_prompts: list[str] = None
+    test_prompts: Optional[list[str]] = None
 
     # Number of images to generate per prompt/director combo
     num_samples_per_test: int = 3
@@ -40,7 +41,7 @@ class EvaluationConfig:
     eval_resolution: int = 1024
 
     # Seeds for reproducible evaluation
-    eval_seeds: list[int] = None
+    eval_seeds: Optional[list[int]] = None
 
     # Metrics to compute
     compute_clip_similarity: bool = True
@@ -78,7 +79,7 @@ class GradioConfig:
     show_error: bool = True
 
     # Example prompts for the interface
-    example_prompts: list[str] = None
+    example_prompts: Optional[list[str]] = None
 
     def __post_init__(self):
         if self.example_prompts is None:

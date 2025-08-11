@@ -282,15 +282,23 @@ class FluxServeModel:
 
         # Unload current LoRA if any
         if self.current_lora is not None:
-            self.lora_pipeline.unload_lora_weights()
-            self.current_lora = None
+            try:
+                self.lora_pipeline.unload_lora_weights()
+                self.current_lora = None
+            except Exception as e:
+                logger.warning(f"Failed to unload LoRA {self.current_lora}: {e}")
+                self.current_lora = None
 
         # Load new LoRA if specified
         if lora_name and lora_name in self.available_loras:
             lora_info = self.available_loras[lora_name]
-            self.lora_pipeline.load_lora_weights(lora_info.path)
-            self.current_lora = lora_name
-            return True
+            try:
+                self.lora_pipeline.load_lora_weights(lora_info.path)
+                self.current_lora = lora_name
+                return True
+            except Exception as e:
+                logger.error(f"Failed to load LoRA {lora_name}: {e}")
+                return False
 
         return False
 
